@@ -4,6 +4,7 @@
  */
 #pragma once
 
+#include <sygraph/operators/config.hpp>
 #include <sygraph/sycl/event.hpp>
 #include <sygraph/utils/device.hpp>
 #include <sygraph/utils/memory.hpp>

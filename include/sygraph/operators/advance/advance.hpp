@@ -52,8 +52,9 @@ template<sygraph::operators::load_balancer Lb,
 sygraph::Event vertices(GraphT& graph, sygraph::frontier::Frontier<T, FrontierType>& out, LambdaT&& functor, size_t expected_size = 0) {
   auto in = sygraph::frontier::Frontier<bool, sygraph::frontier::frontier_type::none>{};
   if constexpr (Lb == sygraph::operators::load_balancer::workgroup_mapped) {
-    return sygraph::operators::advance::detail::workgroup_mapped::launchBitmapKernel<sygraph::frontier::frontier_view::graph, FW, T>(
-        graph, in, out, std::forward<LambdaT>(functor), expected_size);
+    return sygraph::operators::advance::detail::workgroup_mapped::
+        launchBitmapKernel<sygraph::frontier::frontier_view::graph, FW, sygraph::operators::direction::push, T>(
+            graph, in, out, std::forward<LambdaT>(functor), expected_size);
     // return sygraph::operators::advance::detail::workgroup_mapped::vertices<FW>(graph, out, std::forward<LambdaT>(functor));
   } else {
     throw std::runtime_error("Load balancer not implemented");
@@ -90,6 +91,7 @@ sygraph::Event vertices(GraphT& graph, LambdaT&& functor, size_t expected_size) 
  * and functor. It supports different types of load balancers and invokes the appropriate
  * implementation based on the load balancer type.
  *
+ * @param Direction The direction of the operation (push or pull).
  * @tparam Lb The type of load balancer to use. Must be one of the values from
  *            `sygraph::operators::load_balancer`.
  * @tparam InView The type of the input frontier view.
@@ -109,6 +111,29 @@ sygraph::Event vertices(GraphT& graph, LambdaT&& functor, size_t expected_size) 
  *
  * @throws std::runtime_error If the specified load balancer is not implemented.
  */
+template<sygraph::operators::direction Direction,
+         sygraph::operators::load_balancer Lb,
+         frontier::frontier_view InView,
+         frontier::frontier_view OutView,
+         typename GraphT,
+         typename LambdaT,
+         typename T,
+         frontier::frontier_type FrontierType>
+sygraph::Event frontier(GraphT& graph,
+                        sygraph::frontier::Frontier<T, FrontierType>& in,
+                        sygraph::frontier::Frontier<T, FrontierType>& out,
+                        LambdaT&& functor,
+                        size_t expected_size = 0) {
+  if constexpr (Lb == sygraph::operators::load_balancer::workitem_mapped) {
+    return sygraph::operators::advance::detail::workitem_mapped::frontier<InView, OutView>(graph, in, out, std::forward<LambdaT>(functor));
+  } else if constexpr (Lb == sygraph::operators::load_balancer::workgroup_mapped) {
+    return sygraph::operators::advance::detail::workgroup_mapped::launchBitmapKernel<Direction, InView, OutView, T>(
+        graph, in, out, std::forward<LambdaT>(functor), expected_size);
+  } else {
+    throw std::runtime_error("Load balancer not implemented");
+  }
+}
+
 template<sygraph::operators::load_balancer Lb,
          frontier::frontier_view InView,
          frontier::frontier_view OutView,
@@ -124,7 +149,7 @@ sygraph::Event frontier(GraphT& graph,
   if constexpr (Lb == sygraph::operators::load_balancer::workitem_mapped) {
     return sygraph::operators::advance::detail::workitem_mapped::frontier<InView, OutView>(graph, in, out, std::forward<LambdaT>(functor));
   } else if constexpr (Lb == sygraph::operators::load_balancer::workgroup_mapped) {
-    return sygraph::operators::advance::detail::workgroup_mapped::launchBitmapKernel<InView, OutView, T>(
+    return sygraph::operators::advance::detail::workgroup_mapped::launchBitmapKernel<InView, OutView, sygraph::operators::direction::push, T>(
         graph, in, out, std::forward<LambdaT>(functor), expected_size);
   } else {
     throw std::runtime_error("Load balancer not implemented");
@@ -138,6 +163,7 @@ sygraph::Event frontier(GraphT& graph,
  * a specified load balancer and input view type to manage the processing. The function returns
  * an event representing the completion of the operation. The output is not stored in any frontier.
  *
+ * @param Direction The direction of the operation (push or pull).
  * @tparam Lb The load balancer type to be used.
  * @tparam InView The input view type of the frontier.
  * @tparam GraphT The type of the graph.
@@ -152,6 +178,18 @@ sygraph::Event frontier(GraphT& graph,
  *
  * @return An event representing the completion of the frontier processing.
  */
+template<sygraph::operators::direction Direction,
+         sygraph::operators::load_balancer Lb,
+         frontier::frontier_view InView,
+         typename GraphT,
+         typename LambdaT,
+         typename T,
+         frontier::frontier_type FrontierType>
+sygraph::Event frontier(GraphT& graph, sygraph::frontier::Frontier<T, FrontierType>& in, LambdaT&& functor, size_t expected_size = 0) {
+  auto out = sygraph::frontier::Frontier<void, sygraph::frontier::frontier_type::none>{};
+  return frontier<Direction, Lb, InView, sygraph::frontier::frontier_view::none>(graph, in, out, std::forward<LambdaT>(functor), expected_size);
+}
+
 template<sygraph::operators::load_balancer Lb,
          frontier::frontier_view InView,
          typename GraphT,
@@ -160,7 +198,8 @@ template<sygraph::operators::load_balancer Lb,
          frontier::frontier_type FrontierType>
 sygraph::Event frontier(GraphT& graph, sygraph::frontier::Frontier<T, FrontierType>& in, LambdaT&& functor, size_t expected_size = 0) {
   auto out = sygraph::frontier::Frontier<void, sygraph::frontier::frontier_type::none>{};
-  return frontier<Lb, InView, sygraph::frontier::frontier_view::none>(graph, in, out, std::forward<LambdaT>(functor), expected_size);
+  return frontier<sygraph::operators::direction::push, Lb, InView, sygraph::frontier::frontier_view::none>(
+      graph, in, out, std::forward<LambdaT>(functor), expected_size);
 }
 
 } // namespace advance
