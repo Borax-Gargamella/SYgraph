@@ -325,7 +325,11 @@ public:
 
   const DeviceFrontier& getDeviceFrontier() const { return _bitmap; }
 
-  sycl::event computeActiveFrontier() const {
+  /**
+   * @brief Computes the active frontier by populating the offsets array with the indices of active elements.
+   * @param invert If true, computes the inactive frontier instead (for pull-based advance operations).
+   */
+  sycl::event computeActiveFrontier(bool invert = false) const {
     sycl::range<1> local_range{types::detail::COMPUTE_UNIT_SIZE};
     auto bitmap = this->getDeviceFrontier();
     size_t size = bitmap.getBitmapSize(1);
@@ -353,7 +357,17 @@ public:
             for (uint32_t gid = item.get_global_linear_id(); gid < size; gid += item.get_global_range(0)) {
               bitmap_type data = bitmap.getData(1)[gid];
               for (size_t i = 0; i < range; i++) {
-                if (data & (static_cast<bitmap_type>(1) << i)) { local_offsets[local_size_ref++] = i + gid * range; }
+                bool is_active = (data & (static_cast<bitmap_type>(1) << i)) != 0;
+                uint32_t pos;
+                if (!invert) {
+                  if (!is_active) continue;
+                  pos = local_size_ref.fetch_add(1);
+                } else {
+                  // include when NOT (active && first level is full)
+                  if (is_active && bitmap.getData(0)[i + gid * range] == std::numeric_limits<bitmap_type>::max()) continue;
+                  pos = local_size_ref.fetch_add(1);
+                }
+                local_offsets[pos] = static_cast<int>(i + gid * range);
               }
             }
 
