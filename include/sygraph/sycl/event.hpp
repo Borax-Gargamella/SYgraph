@@ -35,6 +35,12 @@ public:
   void wait() { sycl::event::wait(); }
 
   void waitAndThrow() { sycl::event::wait_and_throw(); }
+
+  float getRuntime() const {
+    auto start = sycl::event::get_profiling_info<sycl::info::event_profiling::command_start>();
+    auto end = sycl::event::get_profiling_info<sycl::info::event_profiling::command_end>();
+    return static_cast<float>(end - start) / 1e6f; // Convert to milliseconds
+  }
 };
 
 } // namespace sygraph
