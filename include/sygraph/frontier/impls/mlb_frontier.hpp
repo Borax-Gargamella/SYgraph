@@ -194,7 +194,7 @@ public:
     auto bitmap = this->getDeviceFrontier();
 
     const size_t local_size = types::detail::COMPUTE_UNIT_SIZE;
-    const size_t global_size = local_size * sygraph::detail::device::getMaxComputeUints(_queue);
+    const size_t global_size = local_size * sygraph::detail::device::getNumComputeUnits(_queue);
 
     size_t bitmap_size = bitmap.getBitmapSize(Levels - 1);
     size_t moduled_size = bitmap_size % local_size ? bitmap_size + local_size - (bitmap_size % local_size) : bitmap_size;
@@ -336,7 +336,7 @@ public:
     size_t size = bitmap.getBitmapSize(1);
     uint32_t range = bitmap.getBitmapRange();
     // sycl::range<1> global_range{(size > local_range[0] ? size + local_range[0] - (size % local_range[0]) : local_range[0])};
-    size_t global_size = sygraph::detail::device::getMaxComputeUints(_queue) * local_range[0];
+    size_t global_size = sygraph::detail::device::getNumComputeUnits(_queue) * local_range[0];
     sycl::range<1> global_range{global_size};
 
     auto e = this->_queue.submit([&](sycl::handler& cgh) {

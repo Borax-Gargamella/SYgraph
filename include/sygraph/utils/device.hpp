@@ -28,9 +28,9 @@ uint32_t getWorkgroupSize(sycl::queue& queue) {
   return device.get_info<sycl::info::device::max_work_group_size>();
 }
 
-uint32_t getMaxComputeUints(sycl::queue& queue) {
+uint32_t getNumComputeUnits(sycl::queue& queue) {
   auto device = queue.get_device();
-  return device.get_info<sycl::info::device::max_compute_units>();
+  return device.get_info<sycl::ext::oneapi::info::device::num_compute_units>();
 }
 
 } // namespace device

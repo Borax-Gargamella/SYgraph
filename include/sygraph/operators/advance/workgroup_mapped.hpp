@@ -246,7 +246,7 @@ sygraph::Event launchBitmapKernel(GraphT& graph, const InFrontierT& in, const Ou
     if (expected_size > 0) {
       global_size = {expected_size + (local_range[0] - (expected_size % local_range[0]))};
     } else if (expected_size == 0) { // use the maximum GPU processing units
-      global_size = {local_range[0] * (sygraph::detail::device::getMaxComputeUints(q) * 8)};
+      global_size = {local_range[0] * (sygraph::detail::device::getNumComputeUnits(q) * coarsening_factor)};
     } else { // need to fetch the actual size
       to_wait.wait_and_throw();
       uint32_t active_size;
