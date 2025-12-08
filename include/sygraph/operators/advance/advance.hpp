@@ -21,6 +21,13 @@ namespace operators {
 
 namespace advance {
 
+namespace frontier_size {
+
+constexpr int fetch_from_memory = -1; // Fetch the frontier size from memory
+constexpr int infer_from_device = 0;  // Infer the frontier size from the device
+
+} // namespace frontier_size
+
 /**
  * @brief Processes the vertices of a graph using a specified functor.
  *
@@ -37,7 +44,7 @@ namespace advance {
  * @param graph The graph to be processed.
  * @param out The output frontier where the results will be stored.
  * @param functor The functor to be applied to each vertex.
- * @param expected_size The expected number of active elements in the input frontier. If not provided, it is set to 0, meaning unkown size.
+ * @param expected_size The expected number of active elements in the input frontier. If not provided, it is set to -1, meaning unknown size.
  *
  * @return A sygraph::Event representing the processing event.
  *
@@ -49,7 +56,10 @@ template<sygraph::operators::load_balancer Lb,
          typename LambdaT,
          typename T,
          frontier::frontier_type FrontierType>
-sygraph::Event vertices(GraphT& graph, sygraph::frontier::Frontier<T, FrontierType>& out, LambdaT&& functor, size_t expected_size = 0) {
+sygraph::Event vertices(GraphT& graph,
+                        sygraph::frontier::Frontier<T, FrontierType>& out,
+                        LambdaT&& functor,
+                        size_t expected_size = frontier_size::fetch_from_memory) {
   auto in = sygraph::frontier::Frontier<bool, sygraph::frontier::frontier_type::none>{};
   if constexpr (Lb == sygraph::operators::load_balancer::workgroup_mapped) {
     return sygraph::operators::advance::detail::workgroup_mapped::
@@ -186,7 +196,8 @@ template<sygraph::operators::direction Direction,
          typename LambdaT,
          typename T,
          frontier::frontier_type FrontierType>
-sygraph::Event frontier(GraphT& graph, sygraph::frontier::Frontier<T, FrontierType>& in, LambdaT&& functor, int expected_size = -1) {
+sygraph::Event
+frontier(GraphT& graph, sygraph::frontier::Frontier<T, FrontierType>& in, LambdaT&& functor, int expected_size = frontier_size::fetch_from_memory) {
   auto out = sygraph::frontier::Frontier<void, sygraph::frontier::frontier_type::none>{};
   return frontier<Direction, Lb, InView, sygraph::frontier::frontier_view::none>(graph, in, out, std::forward<LambdaT>(functor), expected_size);
 }
@@ -197,7 +208,8 @@ template<sygraph::operators::load_balancer Lb,
          typename LambdaT,
          typename T,
          frontier::frontier_type FrontierType>
-sygraph::Event frontier(GraphT& graph, sygraph::frontier::Frontier<T, FrontierType>& in, LambdaT&& functor, int expected_size = -1) {
+sygraph::Event
+frontier(GraphT& graph, sygraph::frontier::Frontier<T, FrontierType>& in, LambdaT&& functor, int expected_size = frontier_size::fetch_from_memory) {
   auto out = sygraph::frontier::Frontier<void, sygraph::frontier::frontier_type::none>{};
   return frontier<sygraph::operators::direction::push, Lb, InView, sygraph::frontier::frontier_view::none>(
       graph, in, out, std::forward<LambdaT>(functor), expected_size);
