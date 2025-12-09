@@ -11,6 +11,7 @@
 #include <sygraph/operators/config.hpp>
 #include <sygraph/sycl/event.hpp>
 #include <sygraph/utils/device.hpp>
+#include <sygraph/utils/kernel.hpp>
 #include <sygraph/utils/types.hpp>
 
 namespace sygraph {
@@ -234,36 +235,13 @@ struct BitmapKernel {
   const LambdaT functor;
 };
 
-
-// Lightweight descriptor of the execution range for the advance kernel.
-struct LaunchConfig {
-  sycl::range<1> global;
-  sycl::range<1> local;
-  sycl::event dependency;
-};
-
-inline size_t roundUpToMultiple(size_t value, size_t factor) {
-  if (factor == 0) { return value; }
-  return ((value + factor - 1) / factor) * factor;
-}
-
-inline size_t ensureLocalMultiple(size_t requested, size_t local_size) {
-  if (requested == 0) { return local_size; }
-  const size_t rounded = roundUpToMultiple(requested, local_size);
-  return std::max(local_size, rounded);
-}
-
 // Determine the execution configuration for vertex/graph frontiers while keeping
 // the heuristics that balance occupancy and available compute.
-template<sygraph::frontier::frontier_view InFW, typename GraphT, typename InFrontierT, typename InFrontierDevT>
-inline LaunchConfig buildLaunchConfig(GraphT& graph,
-                                      const InFrontierT& in,
-                                      const InFrontierDevT& in_dev_frontier,
-                                      bool pull_advance,
-                                      int expected_size,
-                                      size_t coarsening_factor,
-                                      sycl::queue& q) {
-  LaunchConfig config{};
+template<sygraph::frontier::frontier_view InFW, typename GraphT, typename InFrontierT>
+inline sygraph::detail::kernel::LaunchConfig
+buildLaunchConfig(GraphT& graph, const InFrontierT& in, bool pull_advance, int expected_size, size_t coarsening_factor, sycl::queue& q) {
+  sygraph::detail::kernel::LaunchConfig config{};
+  auto in_dev_frontier = in.getDeviceFrontier();
   if constexpr (InFW == sygraph::frontier::frontier_view::vertex) {
     const size_t bitmap_range = in.getBitmapRange();
     config.local = {bitmap_range * coarsening_factor};
@@ -283,13 +261,13 @@ inline LaunchConfig buildLaunchConfig(GraphT& graph,
       throw std::runtime_error("Invalid expected_size value");
     }
 
-    config.global = {ensureLocalMultiple(requested_global, config.local[0])};
+    config.global = {sygraph::detail::kernel::ensureLocalMultiple(requested_global, config.local[0])};
   } else if constexpr (InFW == sygraph::frontier::frontier_view::graph) {
     config.local = {types::detail::COMPUTE_UNIT_SIZE};
     const size_t requested_global = graph.getVertexCount();
-    config.global = {ensureLocalMultiple(requested_global, config.local[0])};
+    config.global = {sygraph::detail::kernel::ensureLocalMultiple(requested_global, config.local[0])};
   } else {
-    static_assert(dependent_false_v<InFrontierDevT>, "Invalid frontier view");
+    throw std::runtime_error("Invalid frontier view for compute operation.");
   }
 
   return config;
@@ -321,7 +299,7 @@ sygraph::Event launchBitmapKernel(GraphT& graph, const InFrontierT& in, const Ou
   const size_t coarsening_factor = types::detail::COMPUTE_UNIT_SIZE / sygraph::detail::device::getSubgroupSize(q);
   const bool pull_advance = (Direction == sygraph::operators::direction::pull);
 
-  const auto launch_cfg = buildLaunchConfig<InFW>(graph, in, in_dev_frontier, pull_advance, expected_size, coarsening_factor, q);
+  const auto launch_cfg = buildLaunchConfig<InFW>(graph, in, pull_advance, expected_size, coarsening_factor, q);
   const sycl::range<1>& local_range = launch_cfg.local;
   const sycl::range<1>& global_range = launch_cfg.global;
   const sycl::event& dependency = launch_cfg.dependency;
