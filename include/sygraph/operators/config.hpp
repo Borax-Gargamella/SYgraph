@@ -18,5 +18,12 @@ enum class direction {
   pull,
 };
 
+namespace frontier_size {
+
+constexpr int fetch_from_memory = -1; // Fetch the frontier size from memory
+constexpr int infer_from_device = 0;  // Infer the frontier size from the device
+
+} // namespace frontier_size
+
 } // namespace operators
 } // namespace sygraph
