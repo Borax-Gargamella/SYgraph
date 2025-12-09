@@ -255,7 +255,11 @@ buildLaunchConfig(GraphT& graph, const InFrontierT& in, bool pull_advance, int e
     } else if (expected_size == frontier_size::fetch_from_memory) {
       config.dependency.wait_and_throw();
       uint32_t active_size = 0;
-      q.copy(in_dev_frontier.getOffsetsSize(), &active_size, 1).wait();
+      auto copy_e = q.copy(in_dev_frontier.getOffsetsSize(), &active_size, 1);
+      copy_e.wait();
+#ifdef ENABLE_PROFILING
+      sygraph::Profiler::addEvent(copy_e, "frontier_size_fetch");
+#endif
       requested_global = static_cast<size_t>(active_size) * bitmap_range;
     } else {
       throw std::runtime_error("Invalid expected_size value");

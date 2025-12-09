@@ -39,7 +39,11 @@ inline sygraph::detail::kernel::LaunchConfig buildLaunchConfig(const GraphT& gra
 
   config.dependency = in.computeActiveFrontier();
   config.dependency.wait_and_throw();
-  q.copy(in_dev_frontier.getOffsetsSize(), &active_size, 1).wait();
+  auto copy_e = q.copy(in_dev_frontier.getOffsetsSize(), &active_size, 1);
+  copy_e.wait();
+#ifdef ENABLE_PROFILING
+  sygraph::Profiler::addEvent(copy_e, "frontier_size_fetch");
+#endif
   const size_t bitmap_range = in.getBitmapRange();
   requested_global = static_cast<size_t>(active_size) * bitmap_range;
 
