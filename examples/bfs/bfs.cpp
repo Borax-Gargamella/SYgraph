@@ -13,14 +13,17 @@ template<typename GraphT, typename BfsT>
 bool validate(const GraphT& graph, BfsT& bfs, uint source) {
   using vertex_t = typename GraphT::vertex_t;
   assert(bfs.getDistance(source) == 0);
-  std::vector<uint> distances(graph.getVertexCount(), graph.getVertexCount() + 1);
+  std::vector<uint32_t> distances(graph.getVertexCount(), graph.getVertexCount() + 1);
   std::vector<vertex_t> in_frontier;
   std::vector<vertex_t> out_frontier;
   in_frontier.push_back(source);
   distances[source] = 0;
 
-  auto row_offsets = graph.getRowOffsets();
-  auto col_indices = graph.getColumnIndices();
+
+  auto* row_offsets = graph.getRowOffsets();
+  auto* col_indices = graph.getColumnIndices();
+
+  auto host_distances = bfs.getDistances();
 
   size_t iter = 0;
   size_t mismatches = 0;
@@ -35,11 +38,7 @@ bool validate(const GraphT& graph, BfsT& bfs, uint source) {
         auto neighbor = col_indices[j];
         if (distances[neighbor] == graph.getVertexCount() + 1) {
           distances[neighbor] = distances[vertex] + 1;
-          if (distances[neighbor] != bfs.getDistance(neighbor)) {
-            // std::cout << "Distance mismatch at vertex " << neighbor << " expected " << distances[neighbor] << " got " << bfs.getDistance(neighbor)
-            // << std::endl;
-            mismatches++;
-          }
+          if (distances[neighbor] != host_distances[neighbor]) { mismatches++; }
           out_frontier.push_back(neighbor);
         }
       }
