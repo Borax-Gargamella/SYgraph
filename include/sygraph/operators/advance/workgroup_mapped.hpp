@@ -20,6 +20,10 @@ namespace advance {
 
 namespace detail {
 
+
+template<typename...>
+inline constexpr bool dependent_false_v = false;
+
 template<sygraph::operators::direction Direction, sygraph::frontier::frontier_view IFW, sygraph::frontier::frontier_view OFW>
 class workgroup_mapped_advance_kernel; // needed only for naming purposes
 
@@ -58,9 +62,7 @@ struct Context {
   }
 
   // Determine whether the current work-group still owns unprocessed segments.
-  SYCL_EXTERNAL inline bool needToProcess(ContextState& state) const {
-    return (state.group_offset * state.coarsening_factor < state.offsets_size);
-  }
+  SYCL_EXTERNAL inline bool needToProcess(ContextState& state) const { return (state.group_offset * state.coarsening_factor < state.offsets_size); }
 
   // Advance the state to the next chunk of bitmap offsets.
   SYCL_EXTERNAL inline void completeIteration(ContextState& state) const { state.group_offset += state.item.get_group_range(0); }
@@ -233,6 +235,66 @@ struct BitmapKernel {
 };
 
 
+// Lightweight descriptor of the execution range for the advance kernel.
+struct LaunchConfig {
+  sycl::range<1> global;
+  sycl::range<1> local;
+  sycl::event dependency;
+};
+
+inline size_t roundUpToMultiple(size_t value, size_t factor) {
+  if (factor == 0) { return value; }
+  return ((value + factor - 1) / factor) * factor;
+}
+
+inline size_t ensureLocalMultiple(size_t requested, size_t local_size) {
+  if (requested == 0) { return local_size; }
+  const size_t rounded = roundUpToMultiple(requested, local_size);
+  return std::max(local_size, rounded);
+}
+
+// Determine the execution configuration for vertex/graph frontiers while keeping
+// the heuristics that balance occupancy and available compute.
+template<sygraph::frontier::frontier_view InFW, typename GraphT, typename InFrontierT, typename InFrontierDevT>
+inline LaunchConfig buildLaunchConfig(GraphT& graph,
+                                      const InFrontierT& in,
+                                      const InFrontierDevT& in_dev_frontier,
+                                      bool pull_advance,
+                                      int expected_size,
+                                      size_t coarsening_factor,
+                                      sycl::queue& q) {
+  LaunchConfig config{};
+  if constexpr (InFW == sygraph::frontier::frontier_view::vertex) {
+    const size_t bitmap_range = in.getBitmapRange();
+    config.local = {bitmap_range * coarsening_factor};
+    config.dependency = in.computeActiveFrontier(pull_advance);
+
+    size_t requested_global = 0;
+    if (expected_size > 0) {
+      requested_global = static_cast<size_t>(expected_size);
+    } else if (expected_size == frontier_size::infer_from_device) {
+      requested_global = config.local[0] * (sygraph::detail::device::getNumComputeUnits(q) * coarsening_factor);
+    } else if (expected_size == frontier_size::fetch_from_memory) {
+      config.dependency.wait_and_throw();
+      uint32_t active_size = 0;
+      q.copy(in_dev_frontier.getOffsetsSize(), &active_size, 1).wait();
+      requested_global = static_cast<size_t>(active_size) * bitmap_range;
+    } else {
+      throw std::runtime_error("Invalid expected_size value");
+    }
+
+    config.global = {ensureLocalMultiple(requested_global, config.local[0])};
+  } else if constexpr (InFW == sygraph::frontier::frontier_view::graph) {
+    config.local = {types::detail::COMPUTE_UNIT_SIZE};
+    const size_t requested_global = graph.getVertexCount();
+    config.global = {ensureLocalMultiple(requested_global, config.local[0])};
+  } else {
+    static_assert(dependent_false_v<InFrontierDevT>, "Invalid frontier view");
+  }
+
+  return config;
+}
+
 namespace workgroup_mapped {
 
 template<sygraph::frontier::frontier_view InFW,
@@ -259,31 +321,10 @@ sygraph::Event launchBitmapKernel(GraphT& graph, const InFrontierT& in, const Ou
   const size_t coarsening_factor = types::detail::COMPUTE_UNIT_SIZE / sygraph::detail::device::getSubgroupSize(q);
   const bool pull_advance = (Direction == sygraph::operators::direction::pull);
 
-  sycl::event to_wait;
-  sycl::range<1> local_range;
-  size_t global_size;
-  if constexpr (InFW == sygraph::frontier::frontier_view::vertex) {
-    size_t bitmap_range = in.getBitmapRange();
-    to_wait = in.computeActiveFrontier(pull_advance);
-    local_range = {bitmap_range * coarsening_factor};
-    if (expected_size > 0) {
-      global_size = {expected_size + (local_range[0] - (expected_size % local_range[0]))};
-    } else if (expected_size == 0) { // use the maximum GPU processing units
-      global_size = {local_range[0] * (sygraph::detail::device::getNumComputeUnits(q) * coarsening_factor)};
-    } else { // need to fetch the actual size
-      to_wait.wait_and_throw();
-      uint32_t active_size;
-      q.copy(in_dev_frontier.getOffsetsSize(), &active_size, 1).wait();
-      global_size = {active_size * bitmap_range};
-    }
-  } else if constexpr (InFW == sygraph::frontier::frontier_view::graph) {
-    local_range = {types::detail::COMPUTE_UNIT_SIZE};
-    global_size = num_nodes;
-  } else {
-    throw std::runtime_error("Invalid frontier view");
-  }
-  // Ensure the number of launched threads is rounded up to the local size.
-  sycl::range<1> global_range{global_size > local_range[0] ? global_size + (local_range[0] - (global_size % local_range[0])) : local_range[0]};
+  const auto launch_cfg = buildLaunchConfig<InFW>(graph, in, in_dev_frontier, pull_advance, expected_size, coarsening_factor, q);
+  const sycl::range<1>& local_range = launch_cfg.local;
+  const sycl::range<1>& global_range = launch_cfg.global;
+  const sycl::event& dependency = launch_cfg.dependency;
 
   Context<InFW, OutFW, Direction, decltype(in_dev_frontier), decltype(out_dev_frontier)> context{num_nodes, in_dev_frontier, out_dev_frontier};
   using bitmap_kernel_t = BitmapKernel<InFW, OutFW, element_t, decltype(context), decltype(graph_dev), LambdaT>;
@@ -291,7 +332,7 @@ sygraph::Event launchBitmapKernel(GraphT& graph, const InFrontierT& in, const Ou
   const uint32_t max_num_subgroups = sygraph::detail::device::getMaxNumSubgroups(q);
 
   auto e = q.submit([&](sycl::handler& cgh) {
-    cgh.depends_on(to_wait);
+    cgh.depends_on(dependency);
     // Local storage used to distribute vertices across workgroups/subgroups.
     sycl::local_accessor<uint32_t, 1> n_edges_wg{local_range, cgh};
     sycl::local_accessor<uint32_t, 1> n_edges_sg{local_range, cgh};
