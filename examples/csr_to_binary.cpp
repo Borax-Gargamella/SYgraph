@@ -23,7 +23,8 @@ int main(int argc, char** argv) {
   if (argc == 4 && std::string(argv[3]) == "-u") { undirected = true; }
 
   std::cerr << "[* ] Loading COO file" << std::endl;
-  auto coo = sygraph::io::coo::fromCOO<uint, uint, uint>(in_file, undirected);
+  sygraph::graph::Properties properties;
+  auto coo = sygraph::io::coo::fromCOO<uint, uint, uint>(in_file, undirected, &properties);
   std::cerr << "[**] Converting to CSR" << std::endl;
   auto csr = sygraph::io::csr::fromCOO(coo);
 
@@ -32,7 +33,7 @@ int main(int argc, char** argv) {
     std::cerr << "Error: could not open file " << argv[2] << std::endl;
     return 1;
   }
-  sygraph::io::csr::toBinary(csr, out_file);
+  sygraph::io::csr::toBinary(csr, out_file, properties);
 
   std::cout << "[!] Done" << std::endl;
 }

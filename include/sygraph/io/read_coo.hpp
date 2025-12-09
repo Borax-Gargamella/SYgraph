@@ -11,6 +11,7 @@
 #include <sycl/sycl.hpp>
 
 #include <sygraph/formats/coo.hpp>
+#include <sygraph/graph/properties.hpp>
 #include <sygraph/utils/types.hpp>
 
 namespace sygraph {
@@ -30,7 +31,7 @@ namespace coo {
  * @return The COO representation of the graph.
  */
 template<typename ValueT, typename IndexT, typename OffsetT = types::offset_t>
-sygraph::formats::COO<ValueT, IndexT, OffsetT> fromCOO(std::istream& iss, bool undirected = false) {
+sygraph::formats::COO<ValueT, IndexT, OffsetT> fromCOO(std::istream& iss, bool undirected = false, sygraph::graph::Properties* properties = nullptr) {
   // Initialize row pointers for CSR format
 
   // skip all comments that starts with %
@@ -49,14 +50,15 @@ sygraph::formats::COO<ValueT, IndexT, OffsetT> fromCOO(std::istream& iss, bool u
   std::vector<IndexT> coo_col_indices(num_edges);
   std::vector<ValueT> coo_values(num_edges);
 
+  bool weighted = false;
   size_t i = 0;
   while (std::getline(iss, line)) {
     std::istringstream liss{line};
     IndexT u;
     IndexT v;
-    ValueT w;
+    ValueT w = static_cast<ValueT>(1);
     liss >> u >> v;
-    if (!(liss >> w)) w = 1; // if no weight is provided, set it to 1 (default weight)
+    if (liss >> w) { weighted = true; } // explicit weight column provided
     coo_row_indices[i] = u;
     coo_col_indices[i] = v;
     coo_values[i] = w;
@@ -67,6 +69,11 @@ sygraph::formats::COO<ValueT, IndexT, OffsetT> fromCOO(std::istream& iss, bool u
       coo_values[i] = w;
       ++i;
     }
+  }
+
+  if (properties) {
+    properties->directed = !undirected;
+    properties->weighted = weighted;
   }
 
   return sygraph::formats::COO<ValueT, IndexT, OffsetT>(coo_row_indices, coo_col_indices, coo_values);

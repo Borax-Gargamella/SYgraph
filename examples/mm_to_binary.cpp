@@ -8,14 +8,14 @@
 #include <sygraph/sygraph.hpp>
 
 template<typename ValueT, typename IndexT, typename OffsetT>
-void writeToFile(const std::string& filename, const sygraph::formats::CSR<ValueT, IndexT, OffsetT>& csr) {
+void writeToFile(const std::string& filename, const sygraph::formats::CSR<ValueT, IndexT, OffsetT>& csr, const sygraph::graph::Properties& properties) {
   std::cout << "[**] Writing to file" << std::endl;
   std::ofstream out_file(filename, std::ios::binary);
   if (!out_file.is_open()) {
     std::cerr << "Error: could not open file " << filename << std::endl;
     exit(1);
   }
-  sygraph::io::csr::toBinary(csr, out_file);
+  sygraph::io::csr::toBinary(csr, out_file, properties);
 }
 
 int main(int argc, char** argv) {
@@ -39,12 +39,13 @@ int main(int argc, char** argv) {
   in_file.seekg(0, std::ios::beg);
 
   std::cerr << "[* ] Reading MatrixMarket file" << std::endl;
+  sygraph::graph::Properties properties;
   if (banner.isInteger()) {
-    auto csr = sygraph::io::csr::fromMM<uint, uint, uint>(in_file);
-    writeToFile(argv[2], csr);
+    auto csr = sygraph::io::csr::fromMM<uint, uint, uint>(in_file, &properties);
+    writeToFile(argv[2], csr, properties);
   } else if (banner.isReal() || banner.isPattern()) {
-    auto csr = sygraph::io::csr::fromMM<float, uint, uint>(in_file);
-    writeToFile(argv[2], csr);
+    auto csr = sygraph::io::csr::fromMM<float, uint, uint>(in_file, &properties);
+    writeToFile(argv[2], csr, properties);
   } else {
     std::cerr << "Error: unsupported field type" << std::endl;
     return 1;

@@ -2,6 +2,7 @@
  * Copyright (c) 2025 University of Salerno
  * SPDX-License-Identifier: Apache-2.0
  */
+#include <cstdint>
 #include <fstream>
 #include <iostream>
 #include <sstream>
@@ -10,11 +11,19 @@
 
 #include <sygraph/formats/coo.hpp>
 #include <sygraph/formats/csr.hpp>
+#include <sygraph/graph/properties.hpp>
 #include <sygraph/io/matrix_market.hpp>
 
 namespace sygraph {
 namespace io {
 namespace csr {
+namespace detail {
+namespace binary {
+static constexpr uint64_t magic = 0x5359475243535201ULL; // "SYGRCSR" + version marker
+static constexpr uint8_t directed_mask = 0x1;
+static constexpr uint8_t weighted_mask = 0x2;
+} // namespace binary
+} // namespace detail
 
 /**
  * @brief Converts a matrix in CSR format to a CSR object.
@@ -77,7 +86,7 @@ sygraph::formats::CSR<ValueT, IndexT, OffsetT> fromMatrix(std::istream& iss) {
  *       It does not support array format or field types other than real numbers.
  */
 template<typename ValueT, typename IndexT, typename OffsetT>
-sygraph::formats::CSR<ValueT, IndexT, OffsetT> fromMM(std::istream& iss) {
+sygraph::formats::CSR<ValueT, IndexT, OffsetT> fromMM(std::istream& iss, sygraph::graph::Properties* properties = nullptr) {
   sygraph::io::detail::mm::Banner banner;
 
   size_t rows = 0, cols = 0, nnz = 0;
@@ -94,6 +103,10 @@ sygraph::formats::CSR<ValueT, IndexT, OffsetT> fromMM(std::istream& iss) {
         banner_read = true;
         banner.read(line);
         banner.validate<ValueT, IndexT, OffsetT>();
+        if (properties) {
+          properties->directed = !banner.isSymmetric();
+          properties->weighted = !banner.isPattern();
+        }
       }
       continue;
     }; // Skip comments
@@ -171,11 +184,11 @@ sygraph::formats::CSR<ValueT, IndexT, OffsetT> fromMM(std::istream& iss) {
  *       It does not support array format or field types other than real numbers.
  */
 template<typename ValueT, typename IndexT, typename OffsetT>
-sygraph::formats::CSR<ValueT, IndexT, OffsetT> fromMM(const std::string& filename) {
+sygraph::formats::CSR<ValueT, IndexT, OffsetT> fromMM(const std::string& filename, sygraph::graph::Properties* properties = nullptr) {
   std::ifstream file(filename);
   if (!file.is_open()) { throw std::runtime_error("Failed to open file: " + filename); }
 
-  return fromMM<ValueT, IndexT, OffsetT>(file);
+  return fromMM<ValueT, IndexT, OffsetT>(file, properties);
 }
 
 /**
@@ -301,7 +314,9 @@ sygraph::formats::CSR<ValueT, IndexT, OffsetT> fromCOO(const sygraph::formats::C
  * @throws std::runtime_error If the output stream is not in a good state.
  */
 template<typename ValueT, typename IndexT, typename OffsetT>
-void toBinary(const sygraph::formats::CSR<ValueT, IndexT, OffsetT>& csr, std::ostream& oss) {
+void toBinary(const sygraph::formats::CSR<ValueT, IndexT, OffsetT>& csr,
+              std::ostream& oss,
+              const sygraph::graph::Properties& properties = sygraph::graph::Properties()) {
   if (!oss) { throw std::runtime_error("Failed to write binary CSR matrix"); }
 
   auto& row_offsets = csr.getRowOffsets();
@@ -310,6 +325,20 @@ void toBinary(const sygraph::formats::CSR<ValueT, IndexT, OffsetT>& csr, std::os
 
   size_t num_rows = row_offsets.size();
   size_t num_nonzero = column_indices.size();
+
+  uint64_t magic = detail::binary::magic;
+  uint8_t version = 1;
+  uint8_t flags = 0;
+  if (properties.directed) { flags |= detail::binary::directed_mask; }
+  if (properties.weighted) { flags |= detail::binary::weighted_mask; }
+  uint16_t reserved16 = 0;
+  uint32_t reserved32 = 0;
+
+  oss.write(reinterpret_cast<const char*>(&magic), sizeof(uint64_t));
+  oss.write(reinterpret_cast<const char*>(&version), sizeof(uint8_t));
+  oss.write(reinterpret_cast<const char*>(&flags), sizeof(uint8_t));
+  oss.write(reinterpret_cast<const char*>(&reserved16), sizeof(uint16_t));
+  oss.write(reinterpret_cast<const char*>(&reserved32), sizeof(uint32_t));
 
   oss.write(reinterpret_cast<const char*>(&num_rows), sizeof(size_t));
   oss.write(reinterpret_cast<const char*>(&num_nonzero), sizeof(size_t));
@@ -334,14 +363,41 @@ void toBinary(const sygraph::formats::CSR<ValueT, IndexT, OffsetT>& csr, std::os
  * @throws std::runtime_error If the input stream is not valid or if reading fails.
  */
 template<typename ValueT, typename IndexT, typename OffsetT>
-sygraph::formats::CSR<ValueT, IndexT, OffsetT> fromBinary(std::istream& iss) {
+sygraph::formats::CSR<ValueT, IndexT, OffsetT> fromBinary(std::istream& iss, sygraph::graph::Properties* properties = nullptr) {
   if (!iss) { throw std::runtime_error("Failed to read binary CSR matrix"); }
 
-  size_t num_rows;
-  size_t num_nonzero;
+  size_t num_rows = 0;
+  size_t num_nonzero = 0;
+  uint64_t maybe_magic = 0;
 
-  iss.read(reinterpret_cast<char*>(&num_rows), sizeof(size_t));
-  iss.read(reinterpret_cast<char*>(&num_nonzero), sizeof(size_t));
+  iss.read(reinterpret_cast<char*>(&maybe_magic), sizeof(uint64_t));
+  if (!iss) { throw std::runtime_error("Failed to read binary CSR matrix"); }
+
+  if (maybe_magic == detail::binary::magic) {
+    uint8_t version = 0;
+    uint8_t flags = 0;
+    uint16_t reserved16 = 0;
+    uint32_t reserved32 = 0;
+
+    iss.read(reinterpret_cast<char*>(&version), sizeof(uint8_t));
+    iss.read(reinterpret_cast<char*>(&flags), sizeof(uint8_t));
+    iss.read(reinterpret_cast<char*>(&reserved16), sizeof(uint16_t));
+    iss.read(reinterpret_cast<char*>(&reserved32), sizeof(uint32_t));
+    iss.read(reinterpret_cast<char*>(&num_rows), sizeof(size_t));
+    iss.read(reinterpret_cast<char*>(&num_nonzero), sizeof(size_t));
+
+    if (properties) {
+      properties->directed = (flags & detail::binary::directed_mask) != 0;
+      properties->weighted = (flags & detail::binary::weighted_mask) != 0;
+    }
+  } else {
+    num_rows = static_cast<size_t>(maybe_magic);
+    iss.read(reinterpret_cast<char*>(&num_nonzero), sizeof(size_t));
+    if (properties) {
+      properties->directed = true;
+      properties->weighted = true;
+    }
+  }
 
   std::vector<OffsetT> row_ptr(num_rows);
   std::vector<IndexT> col_indices(num_nonzero);
