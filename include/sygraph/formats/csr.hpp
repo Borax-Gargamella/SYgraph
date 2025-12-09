@@ -168,6 +168,47 @@ public:
    */
   void setNnzValues(const std::vector<ValueT>& values) { _nnz_values = values; }
 
+  /**
+   * @brief Returns the transpose (inverse adjacency) of the current CSR matrix.
+   *
+   * This method constructs a new CSR where rows and columns are swapped. It is mainly used to build
+   * the incoming-edge structure of a directed graph starting from its outgoing adjacency.
+   *
+   * @return CSR<ValueT, IndexT, OffsetT> The transposed CSR matrix.
+   */
+  CSR<ValueT, IndexT, OffsetT> invert() const {
+    std::cout << "Inverting CSR matrix..." << std::endl;
+    IndexT n_rows = getRowOffsetsSize();
+    OffsetT n_nonzeros = getNumNonzeros();
+
+    std::vector<OffsetT> inv_row_offsets(static_cast<size_t>(n_rows) + 1, 0);
+    std::vector<IndexT> inv_column_indices(n_nonzeros);
+    std::vector<ValueT> inv_values(n_nonzeros);
+
+    // Count incoming edges for each column to build row offsets of the inverted matrix
+    for (OffsetT idx = 0; idx < n_nonzeros; ++idx) {
+      IndexT column = _column_indices[idx];
+      inv_row_offsets[static_cast<size_t>(column) + 1]++;
+    }
+
+    for (IndexT row = 0; row < n_rows; ++row) { inv_row_offsets[row + 1] += inv_row_offsets[row]; }
+
+    // Insert (col -> row) edges using the computed offsets
+    std::vector<OffsetT> write_offsets = inv_row_offsets;
+    for (IndexT row = 0; row < n_rows; ++row) {
+      OffsetT row_start = _row_offsets[row];
+      OffsetT row_end = _row_offsets[row + 1];
+      for (OffsetT idx = row_start; idx < row_end; ++idx) {
+        IndexT column = _column_indices[idx];
+        OffsetT dest = write_offsets[column]++;
+        inv_column_indices[dest] = row;
+        inv_values[dest] = _nnz_values[idx];
+      }
+    }
+
+    return CSR<ValueT, IndexT, OffsetT>(std::move(inv_row_offsets), std::move(inv_column_indices), std::move(inv_values));
+  }
+
 private:
   std::vector<OffsetT> _row_offsets;
   std::vector<IndexT> _column_indices;

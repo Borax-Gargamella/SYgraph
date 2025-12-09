@@ -182,20 +182,60 @@ public:
     e3.wait();
 
     this->_device_graph = {n_rows, n_nonzeros, column_indices, row_offsets, nnz_values};
+
+    if (properties.directed) {
+      formats::CSR<ValueT, IndexT, OffsetT> inverted_csr = csr.invert();
+
+      IndexT* inv_row_offsets = memory::detail::memoryAlloc<IndexT, Space>(n_rows + 1, _queue);
+      OffsetT* inv_column_indices = memory::detail::memoryAlloc<OffsetT, Space>(n_nonzeros, _queue);
+      ValueT* inv_nnz_values = memory::detail::memoryAlloc<ValueT, Space>(n_nonzeros, _queue);
+      auto e4 = _queue.copy(inverted_csr.getRowOffsets().data(), inv_row_offsets, n_rows + 1);
+      auto e5 = _queue.copy(inverted_csr.getColumnIndices().data(), inv_column_indices, n_nonzeros);
+      auto e6 = _queue.copy(inverted_csr.getValues().data(), inv_nnz_values, n_nonzeros);
+      e4.wait();
+      e5.wait();
+      e6.wait();
+      this->_inverse_device_graph = {n_rows, n_nonzeros, inv_column_indices, inv_row_offsets, inv_nnz_values};
+    } else {
+      this->_inverse_device_graph = this->_device_graph;
+    }
   }
 
   /**
    * @brief Destroys the graph_csr_t object and frees the allocated memory.
    */
   ~GraphCSR() {
-    sycl::free(_device_graph._row_offsets, _queue);
-    sycl::free(_device_graph._column_indices, _queue);
-    sycl::free(_device_graph._nnz_values, _queue);
+    if (_device_graph._row_offsets != nullptr) {
+      sycl::free(_device_graph._row_offsets, _queue);
+      _device_graph._row_offsets = nullptr;
+    }
+    if (_device_graph._column_indices != nullptr) {
+      sycl::free(_device_graph._column_indices, _queue);
+      _device_graph._column_indices = nullptr;
+    }
+    if (_device_graph._nnz_values != nullptr) {
+      sycl::free(_device_graph._nnz_values, _queue);
+      _device_graph._nnz_values = nullptr;
+    }
+    if (_inverse_device_graph._row_offsets != nullptr) {
+      sycl::free(_inverse_device_graph._row_offsets, _queue);
+      _inverse_device_graph._row_offsets = nullptr;
+    }
+    if (_inverse_device_graph._column_indices != nullptr) {
+      sycl::free(_inverse_device_graph._column_indices, _queue);
+      _inverse_device_graph._column_indices = nullptr;
+    }
+    if (_inverse_device_graph._nnz_values != nullptr) {
+      sycl::free(_inverse_device_graph._nnz_values, _queue);
+      _inverse_device_graph._nnz_values = nullptr;
+    }
   }
 
   /* Methods */
 
   auto& getDeviceGraph() { return _device_graph; }
+
+  auto& getInverseDeviceGraph() { return _inverse_device_graph; }
 
   /* Override superclass methods */
 
@@ -383,6 +423,7 @@ private:
   sycl::queue& _queue; ///< The SYCL queue associated with the graph.
   const formats::CSR<ValueT, IndexT, OffsetT>& _csr;
   GraphCSRDevice<IndexT, OffsetT, ValueT> _device_graph;
+  GraphCSRDevice<IndexT, OffsetT, ValueT> _inverse_device_graph;
 };
 } // namespace detail
 } // namespace graph

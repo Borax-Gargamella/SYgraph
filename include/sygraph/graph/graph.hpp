@@ -73,6 +73,8 @@ template<typename GraphT>
 concept GraphConcept = requires(GraphT g) {
   { g.getQueue() } -> std::convertible_to<sycl::queue>;
   { g.getDeviceGraph() };
+  { g.getInverseDeviceGraph() };
+  { g.getProperties() } -> std::convertible_to<Properties>;
 } && detail::DeviceGraphConcept<GraphT>;
 
 } // namespace detail

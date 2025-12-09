@@ -104,32 +104,29 @@ uint getRandomSource(size_t size) {
 }
 
 template<typename ValueT, typename IndexT, typename OffsetT>
-sygraph::formats::CSR<ValueT, IndexT, OffsetT> readCSR(const ArgsT<IndexT>& args) {
+sygraph::formats::CSR<ValueT, IndexT, OffsetT> readCSR(const ArgsT<IndexT>& args, sygraph::graph::Properties* properties = nullptr) {
   sygraph::formats::CSR<ValueT, IndexT, OffsetT> csr;
+  sygraph::graph::Properties local_properties;
+  auto* props = properties ? properties : &local_properties;
   if (args.binary_format) {
     std::ifstream file(args.path, std::ios::binary);
     if (!file.is_open()) {
       std::cerr << "Error: could not open file " << args.path << std::endl;
       exit(1);
     }
-    csr = sygraph::io::csr::fromBinary<ValueT, IndexT, OffsetT>(file);
+    csr = sygraph::io::csr::fromBinary<ValueT, IndexT, OffsetT>(file, props);
   } else if (args.matrix_market) {
-    csr = sygraph::io::csr::fromMM<ValueT, IndexT, OffsetT>(args.path);
+    csr = sygraph::io::csr::fromMM<ValueT, IndexT, OffsetT>(args.path, props);
   } else {
     std::ifstream file(args.path);
     if (!file.is_open()) {
       std::cerr << "Error: could not open file " << args.path << std::endl;
       exit(1);
     }
-    auto coo = sygraph::io::coo::fromCOO<ValueT, IndexT, OffsetT>(file, args.undirected);
+    auto coo = sygraph::io::coo::fromCOO<ValueT, IndexT, OffsetT>(file, args.undirected, props);
     csr = sygraph::io::csr::fromCOO(coo);
   }
 
-  std::ifstream file(args.path);
-  if (!file.is_open()) {
-    std::cerr << "Error: could not open file " << args.path << std::endl;
-    exit(1);
-  }
   return csr;
 }
 
@@ -140,6 +137,7 @@ void printGraphInfo(const GraphT& g) {
   std::cerr << std::setw(17) << "Vertex count:" << std::setw(10) << g.getVertexCount() << std::endl;
   std::cerr << std::setw(17) << "Edge count:" << std::setw(10) << g.getEdgeCount() << std::endl;
   std::cerr << std::setw(17) << "Average degree:" << std::setw(10) << g.getEdgeCount() / g.getVertexCount() << std::endl;
+  std::cerr << std::setw(17) << "Directed:" << std::setw(10) << (g.getProperties().directed ? "yes" : "no") << std::endl;
   std::cerr << "-----------------------------------" << std::endl;
 }
 

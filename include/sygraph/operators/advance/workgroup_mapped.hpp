@@ -299,6 +299,7 @@ sygraph::Event launchBitmapKernel(GraphT& graph, const InFrontierT& in, const Ou
   auto in_dev_frontier = in.getDeviceFrontier();
   auto out_dev_frontier = out.getDeviceFrontier();
   auto graph_dev = graph.getDeviceGraph();
+  if constexpr (Direction == sygraph::operators::direction::pull) { graph_dev = graph.getInverseDeviceGraph(); }
 
   // Keep each workgroup busy by mapping multiple bitmap entries to it.
   const size_t coarsening_factor = types::detail::COMPUTE_UNIT_SIZE / sygraph::detail::device::getSubgroupSize(q);

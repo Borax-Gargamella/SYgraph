@@ -4,6 +4,7 @@ add_executable(bitmap_frontier frontier/bitmap_frontier.cpp)
 add_executable(csr formats/csr.cpp)
 add_executable(coo2csr_weighted formats/coo2csr.cpp)
 add_executable(coo2csr_unweighted formats/coo2csr_unweighted.cpp)
+add_executable(format_properties formats/properties.cpp)
 add_executable(graph_build graph/graph.cpp)
 add_executable(advance operators/advance.cpp)
 add_executable(advance_graph operators/advance_graph.cpp)
@@ -35,6 +36,12 @@ add_test(
 add_test(
   NAME coo2csr_unweighted
   COMMAND coo2csr_unweighted
+  WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
+)
+
+add_test(
+  NAME format_properties
+  COMMAND format_properties
   WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
 )
 
