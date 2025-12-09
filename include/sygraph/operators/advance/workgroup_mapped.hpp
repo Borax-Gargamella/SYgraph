@@ -135,6 +135,9 @@ struct BitmapKernel {
 
     auto state = context.init(item);
 
+    sycl::atomic_ref<uint32_t, sycl::memory_order::relaxed, sycl::memory_scope::sub_group> sg_tail{subgroup_reduce_tail[sgroup_id]};
+    sycl::atomic_ref<uint32_t, sycl::memory_order::relaxed, sycl::memory_scope::work_group> wg_tail{workgroup_reduce_tail[0]};
+
     while (context.needToProcess(state)) {
       const auto assigned_vertex = context.getAssignedElement(state);
 
@@ -142,8 +145,6 @@ struct BitmapKernel {
       if (sgroup.leader()) { subgroup_reduce_tail[sgroup_id] = 0; }
       if (wgroup.leader()) { workgroup_reduce_tail[0] = 0; }
 
-      sycl::atomic_ref<uint32_t, sycl::memory_order::relaxed, sycl::memory_scope::sub_group> sg_tail{subgroup_reduce_tail[sgroup_id]};
-      sycl::atomic_ref<uint32_t, sycl::memory_order::relaxed, sycl::memory_scope::work_group> wg_tail{workgroup_reduce_tail[0]};
 
       const uint32_t offset = sgroup_id * sgroup_size;
       if (context.check(state, assigned_vertex)) {

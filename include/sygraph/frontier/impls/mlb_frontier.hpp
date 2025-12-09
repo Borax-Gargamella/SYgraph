@@ -346,7 +346,7 @@ public:
       cgh.parallel_for<mlb_compute_active_frontier_kernel>(
           sycl::nd_range<1>{global_range, local_range},
           [=, offsets_size = bitmap.getOffsetsSize(), offsets = bitmap.getOffsets()](sycl::nd_item<1> item) {
-            if (offsets_size[0] > 0) { return; }
+            // if (offsets_size[0] > 0) { return; } // TODO optimize for multiple calls on the same frontier
             int gid = item.get_global_linear_id();
             auto group = item.get_group();
             if (item.get_global_linear_id() == 0) { offsets_size[0] = 0; }
@@ -360,15 +360,12 @@ public:
               for (size_t i = 0; i < range; i++) {
                 bool is_active = (data & (static_cast<bitmap_type>(1) << i)) != 0;
                 uint32_t pos;
-                if (!invert) {
-                  if (!is_active) continue;
-                  pos = local_size_ref.fetch_add(1);
-                } else {
-                  // include when NOT (active && first level is full)
-                  if (is_active && bitmap.getData(0)[i + gid * range] == std::numeric_limits<bitmap_type>::max()) continue;
-                  pos = local_size_ref.fetch_add(1);
+                if ((!invert && !is_active)
+                    || (invert && (is_active && bitmap.getData(0)[i + gid * range] == std::numeric_limits<bitmap_type>::max()))) {
+                  continue;
                 }
-                local_offsets[pos] = static_cast<int>(i + gid * range);
+
+                local_offsets[local_size_ref++] = static_cast<int>(i + gid * range);
               }
             }
 
