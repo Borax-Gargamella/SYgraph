@@ -1,7 +1,26 @@
 # Copyright (c) 2025 University of Salerno
 # SPDX-License-Identifier: Apache-2.0
 
-link_libraries(sygraph)
+include(FetchContent)
+
+set(CLI11_BUILD_TESTS OFF CACHE BOOL "" FORCE)
+set(CLI11_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
+set(CLI11_BUILD_DOCS OFF CACHE BOOL "" FORCE)
+
+FetchContent_Declare(
+  cli11
+  GIT_REPOSITORY https://github.com/CLIUtils/CLI11.git
+  GIT_TAG v2.4.1
+  GIT_SHALLOW TRUE
+)
+
+FetchContent_GetProperties(cli11)
+if(NOT cli11_POPULATED)
+  FetchContent_Populate(cli11)
+  add_subdirectory(${cli11_SOURCE_DIR} ${cli11_BINARY_DIR} EXCLUDE_FROM_ALL)
+endif()
+
+link_libraries(sygraph CLI11::CLI11)
 
 add_executable(csr2binary csr_to_binary.cpp)
 add_executable(market2binary mm_to_binary.cpp)
