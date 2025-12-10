@@ -3,9 +3,13 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 #include "../include/utils.hpp"
+#include <CLI/CLI.hpp>
+#include <algorithm>
+#include <cctype>
 #include <chrono>
 #include <iomanip>
 #include <iostream>
+#include <string>
 #include <sycl/sycl.hpp>
 #include <sygraph/sygraph.hpp>
 
@@ -51,13 +55,37 @@ bool validate(const GraphT& graph, BfsT& bfs, uint source) {
   return mismatches == 0;
 }
 
+std::string directionToString(sygraph::algorithms::BFSDirection direction) {
+  switch (direction) {
+    case sygraph::algorithms::BFSDirection::push: return "push";
+    case sygraph::algorithms::BFSDirection::pull: return "pull";
+    case sygraph::algorithms::BFSDirection::hybrid: return "hybrid";
+    default: return "push";
+  }
+}
+
+sygraph::algorithms::BFSDirection parseAdvanceDirection(std::string value) {
+  std::transform(value.begin(), value.end(), value.begin(), [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+  if (value == "pull") { return sygraph::algorithms::BFSDirection::pull; }
+  if (value == "hybrid") { return sygraph::algorithms::BFSDirection::hybrid; }
+  return sygraph::algorithms::BFSDirection::push;
+}
+
 int main(int argc, char** argv) {
   using type_t = unsigned int;
-  ArgsT<type_t> args{argc, argv};
+  GraphOptions opts;
+  CLI::App app{"SYgraph example"};
+  auto source_option = configureBaseCLI(app, opts);
+  std::string advance_mode = "push";
+  app.add_option("--advance", advance_mode, "Select BFS advance strategy (push|pull|hybrid)")
+      ->check(CLI::IsMember({"push", "pull", "hybrid"}, CLI::ignore_case));
+  CLI11_PARSE(app, argc, argv);
+  finalizeGraphOptions(opts, source_option);
+  auto advance_direction = parseAdvanceDirection(advance_mode);
 
   std::cerr << "[*] Reading CSR" << std::endl;
   sygraph::graph::Properties properties;
-  auto csr = readCSR<float, type_t, type_t>(args, &properties);
+  auto csr = readCSR<float, type_t, type_t>(opts, &properties);
 
 #ifdef ENABLE_PROFILING
   sycl::queue q{sycl::gpu_selector_v, sycl::property::queue::enable_profiling()};
@@ -73,18 +101,19 @@ int main(int argc, char** argv) {
   size_t size = G.getVertexCount();
 
   sygraph::algorithms::BFS bfs{G};
-  if (args.random_source) { args.source = getRandomSource(size); }
-  bfs.init(args.source);
+  if (opts.random_source) { opts.source = getRandomSource(size); }
+  type_t bfs_source = static_cast<type_t>(opts.source);
+  bfs.init(bfs_source);
 
-  std::cout << "[*] Running BFS on source " << args.source << std::endl;
-  bfs.run<true>();
+  std::cout << "[*] Running BFS (" << directionToString(advance_direction) << " advance) on source " << opts.source << std::endl;
+  bfs.run(advance_direction);
 
   std::cerr << "[!] Done" << std::endl;
 
-  if (args.validate) {
+  if (opts.validate) {
     std::cout << "Validation: [";
     auto validation_start = std::chrono::high_resolution_clock::now();
-    if (!validate(G, bfs, args.source)) {
+    if (!validate(G, bfs, opts.source)) {
       std::cout << failString();
     } else {
       std::cout << successString();
@@ -95,7 +124,7 @@ int main(int argc, char** argv) {
               << std::endl;
   }
 
-  if (args.print_output) {
+  if (opts.print_output) {
     std::cout << std::left;
     std::cout << std::setw(10) << "Vertex" << std::setw(10) << "Distance" << std::setw(10) << "Parent" << std::endl;
     auto distances = bfs.getDistances();
