@@ -1,4 +1,5 @@
 #include "../include/utils.hpp"
+#include <CLI/CLI.hpp>
 #include <chrono>
 #include <iomanip>
 #include <iostream>
@@ -12,11 +13,15 @@ bool validate(const GraphT& graph, BfsT& bfs, uint source) {
 
 int main(int argc, char** argv) {
   using type_t = unsigned int;
-  ArgsT<type_t> args{argc, argv};
+  GraphOptions opts;
+  CLI::App app{"SYgraph example"};
+  auto source_option = configureBaseCLI(app, opts);
+  CLI11_PARSE(app, argc, argv);
+  finalizeGraphOptions(opts, source_option);
 
   std::cerr << "[*] Reading CSR" << std::endl;
   sygraph::graph::Properties properties;
-  auto csr = readCSR<type_t, type_t, type_t>(args, &properties);
+  auto csr = readCSR<type_t, type_t, type_t>(opts, &properties);
 
 #ifdef ENABLE_PROFILING
   sycl::queue q{sycl::gpu_selector_v, sycl::property::queue::enable_profiling()};
@@ -39,10 +44,10 @@ int main(int argc, char** argv) {
 
   std::cerr << "[!] Done" << std::endl;
 
-  if (args.validate) {
+  if (opts.validate) {
     std::cout << "Validation: [";
     auto validation_start = std::chrono::high_resolution_clock::now();
-    if (!validate(G, tc, args.source)) {
+    if (!validate(G, tc, opts.source)) {
       std::cout << failString();
     } else {
       std::cout << successString();
@@ -53,7 +58,7 @@ int main(int argc, char** argv) {
               << std::endl;
   }
 
-  if (args.print_output) { /* TODO implement*/
+  if (opts.print_output) { /* TODO implement*/
     std::cout << "Total num triangles: " << tc.getNumTriangles() << std::endl;
   }
 
