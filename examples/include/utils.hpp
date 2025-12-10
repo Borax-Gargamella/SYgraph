@@ -2,6 +2,10 @@
  * Copyright (c) 2025 University of Salerno
  * SPDX-License-Identifier: Apache-2.0
  */
+#pragma once
+
+#include <CLI/CLI.hpp>
+#include <fstream>
 #include <iomanip>
 #include <iostream>
 #include <random>
@@ -21,70 +25,71 @@ constexpr sygraph::memory::space graph_location = sygraph::memory::space::shared
 #error "Invalid GRAPH_LOCATION value. Must be 0 (host), 1 (device), or 2 (shared)."
 #endif
 
-template<typename IndexT>
-struct ArgsT {
+struct GraphOptions {
   bool print_output = false;
   bool validate = false;
   bool binary_format = false;
   bool matrix_market = false;
-  bool random_source = true;
   bool undirected = false;
+  bool random_source = true;
   std::string path;
-  IndexT source;
-
-  void printUsage() {
-    std::cerr << "Usage: " << path << " [-b] <path-to-graph> [-p] [-v] [-u] [-s <source>]" << std::endl;
-    std::cerr << "Options:" << std::endl;
-    std::cerr << "  -h: show this message" << std::endl;
-    std::cerr << "  -b: binary format" << std::endl;
-    std::cerr << "  -p: print output" << std::endl;
-    std::cerr << "  -v: validate output" << std::endl;
-    std::cerr << "  -u: undirected graph [only for non-binary format]" << std::endl;
-    std::cerr << "  -s <source>: source vertex" << std::endl;
-  }
-
-  ArgsT(int argc, char** argv) {
-    if (argc < 2) {
-      printUsage();
-      exit(1);
-    } else {
-      if (std::string(argv[1]) == "-b") {
-        binary_format = true;
-        path = argv[2];
-      } else if (std::string(argv[1]) == "-m") {
-        matrix_market = true;
-        path = argv[2];
-      } else if (std::string(argv[1]) == "-h") {
-        printUsage();
-        exit(0);
-      } else {
-        path = argv[1];
-      }
-    }
-    for (int i = 2; i < argc; i++) {
-      if (std::string(argv[i]) == "-p") {
-        print_output = true;
-      } else if (std::string(argv[i]) == "-v") {
-        validate = true;
-      } else if (std::string(argv[i]) == "-u") {
-        undirected = true;
-      } else if (std::string(argv[i]) == "-s") {
-        random_source = false;
-        try {
-          source = std::stoi(argv[i + 1]);
-        } catch (std::exception& e) {
-          std::cerr << "Error: -s flag requires an integer argument" << std::endl;
-          exit(1);
-        }
-      } else if (std::string(argv[i]) == "-h") {
-        printUsage();
-        exit(0);
-      } else {
-        continue;
-      }
-    }
-  }
+  size_t source = 0;
 };
+
+inline CLI::Option* configureBaseCLI(CLI::App& app, GraphOptions& opts) {
+  auto binary_flag = app.add_flag("-b,--binary", opts.binary_format, "Treat input as binary CSR format");
+  auto matrix_flag = app.add_flag("-m,--matrix-market", opts.matrix_market, "Treat input as Matrix Market format");
+  if (binary_flag && matrix_flag) {
+    binary_flag->excludes(matrix_flag);
+    matrix_flag->excludes(binary_flag);
+  }
+
+  app.add_flag("-p,--print", opts.print_output, "Print algorithm output to stdout");
+  app.add_flag("-v,--validate", opts.validate, "Validate algorithm output against CPU implementation");
+  app.add_flag("-u,--undirected", opts.undirected, "Treat input COO as an undirected graph");
+
+  auto source_opt = app.add_option("-s,--source", opts.source, "Specify the source vertex");
+  source_opt->check(CLI::NonNegativeNumber);
+
+  app.add_option("graph", opts.path, "Path to the graph file")->required();
+
+  return source_opt;
+}
+
+inline void finalizeGraphOptions(GraphOptions& opts, CLI::Option* source_opt) {
+  if (source_opt && source_opt->count() > 0) {
+    opts.random_source = false;
+  } else {
+    opts.random_source = true;
+  }
+}
+
+template<typename ValueT, typename IndexT, typename OffsetT>
+sygraph::formats::CSR<ValueT, IndexT, OffsetT> readCSR(const GraphOptions& opts, sygraph::graph::Properties* properties = nullptr) {
+  sygraph::formats::CSR<ValueT, IndexT, OffsetT> csr;
+  sygraph::graph::Properties local_properties;
+  auto* props = properties ? properties : &local_properties;
+  if (opts.binary_format) {
+    std::ifstream file(opts.path, std::ios::binary);
+    if (!file.is_open()) {
+      std::cerr << "Error: could not open file " << opts.path << std::endl;
+      exit(1);
+    }
+    csr = sygraph::io::csr::fromBinary<ValueT, IndexT, OffsetT>(file, props);
+  } else if (opts.matrix_market) {
+    csr = sygraph::io::csr::fromMM<ValueT, IndexT, OffsetT>(opts.path, props);
+  } else {
+    std::ifstream file(opts.path);
+    if (!file.is_open()) {
+      std::cerr << "Error: could not open file " << opts.path << std::endl;
+      exit(1);
+    }
+    auto coo = sygraph::io::coo::fromCOO<ValueT, IndexT, OffsetT>(file, opts.undirected, props);
+    csr = sygraph::io::csr::fromCOO(coo);
+  }
+
+  return csr;
+}
 
 template<typename T>
 void printFrontier(T& f, std::string prefix = "") {
@@ -96,38 +101,11 @@ void printFrontier(T& f, std::string prefix = "") {
   std::cout << std::endl;
 }
 
-uint getRandomSource(size_t size) {
+inline size_t getRandomSource(size_t size) {
   std::random_device rd;
   std::mt19937 gen(rd());
   std::uniform_int_distribution<> dis(0, size - 1);
   return dis(gen);
-}
-
-template<typename ValueT, typename IndexT, typename OffsetT>
-sygraph::formats::CSR<ValueT, IndexT, OffsetT> readCSR(const ArgsT<IndexT>& args, sygraph::graph::Properties* properties = nullptr) {
-  sygraph::formats::CSR<ValueT, IndexT, OffsetT> csr;
-  sygraph::graph::Properties local_properties;
-  auto* props = properties ? properties : &local_properties;
-  if (args.binary_format) {
-    std::ifstream file(args.path, std::ios::binary);
-    if (!file.is_open()) {
-      std::cerr << "Error: could not open file " << args.path << std::endl;
-      exit(1);
-    }
-    csr = sygraph::io::csr::fromBinary<ValueT, IndexT, OffsetT>(file, props);
-  } else if (args.matrix_market) {
-    csr = sygraph::io::csr::fromMM<ValueT, IndexT, OffsetT>(args.path, props);
-  } else {
-    std::ifstream file(args.path);
-    if (!file.is_open()) {
-      std::cerr << "Error: could not open file " << args.path << std::endl;
-      exit(1);
-    }
-    auto coo = sygraph::io::coo::fromCOO<ValueT, IndexT, OffsetT>(file, args.undirected, props);
-    csr = sygraph::io::csr::fromCOO(coo);
-  }
-
-  return csr;
 }
 
 template<typename GraphT>
@@ -141,20 +119,20 @@ void printGraphInfo(const GraphT& g) {
   std::cerr << "-----------------------------------" << std::endl;
 }
 
-void printDeviceInfo(sycl::queue& queue, std::string prefix = "") {
+inline void printDeviceInfo(sycl::queue& queue, std::string prefix = "") {
   std::string device_name = queue.get_device().get_info<sycl::info::device::name>();
   std::string device_backend = queue.get_device().get_platform().get_info<sycl::info::platform::name>();
   std::cerr << prefix << "Running on: " << "[" << device_backend << "] " << device_name << std::endl;
 }
 
-bool isConsoleOutput() { return static_cast<int>(static_cast<int>(isatty(STDOUT_FILENO) != 0)) != 0; }
+inline bool isConsoleOutput() { return static_cast<int>(static_cast<int>(isatty(STDOUT_FILENO) != 0)) != 0; }
 
-std::string successString() {
+inline std::string successString() {
   if (!isConsoleOutput()) { return "Success"; }
   return "\033[1;32mSuccess\033[0m";
 }
 
-std::string failString() {
+inline std::string failString() {
   if (!isConsoleOutput()) { return "Failed"; }
   return "\033[1;31mFailed\033[0m";
 }
