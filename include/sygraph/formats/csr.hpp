@@ -177,7 +177,6 @@ public:
    * @return CSR<ValueT, IndexT, OffsetT> The transposed CSR matrix.
    */
   CSR<ValueT, IndexT, OffsetT> invert() const {
-    std::cout << "Inverting CSR matrix..." << std::endl;
     IndexT n_rows = getRowOffsetsSize();
     OffsetT n_nonzeros = getNumNonzeros();
 
