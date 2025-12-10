@@ -3,6 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 #include "../include/utils.hpp"
+#include <CLI/CLI.hpp>
 #include <chrono>
 #include <iomanip>
 #include <iostream>
@@ -66,11 +67,15 @@ bool validate(const GraphT& graph, BenchT& sssp, uint source) {
 
 int main(int argc, char** argv) {
   using type_t = unsigned int;
-  ArgsT<type_t> args{argc, argv};
+  GraphOptions opts;
+  CLI::App app{"SYgraph example"};
+  auto source_option = configureBaseCLI(app, opts);
+  CLI11_PARSE(app, argc, argv);
+  finalizeGraphOptions(opts, source_option);
 
   std::cerr << "[*] Reading CSR" << std::endl;
   sygraph::graph::Properties properties;
-  auto csr = readCSR<float, type_t, type_t>(args, &properties);
+  auto csr = readCSR<float, type_t, type_t>(opts, &properties);
 
 #ifdef ENABLE_PROFILING
   sycl::queue q{sycl::gpu_selector_v, sycl::property::queue::enable_profiling()};
@@ -84,18 +89,19 @@ int main(int argc, char** argv) {
   size_t size = G.getVertexCount();
 
   sygraph::algorithms::SSSP sssp{G};
-  if (args.random_source) { args.source = getRandomSource(size); }
-  sssp.init(args.source);
+  if (opts.random_source) { opts.source = getRandomSource(size); }
+  type_t sssp_source = static_cast<type_t>(opts.source);
+  sssp.init(sssp_source);
 
-  std::cout << "[*] Running SSSP on source " << args.source << std::endl;
+  std::cout << "[*] Running SSSP on source " << opts.source << std::endl;
   sssp.run<true>();
 
   std::cerr << "[!] Done" << std::endl;
 
-  if (args.validate) {
+  if (opts.validate) {
     std::cout << "Validation: [";
     auto validation_start = std::chrono::high_resolution_clock::now();
-    if (!validate(G, sssp, args.source)) {
+    if (!validate(G, sssp, opts.source)) {
       std::cout << failString();
     } else {
       std::cout << successString();
@@ -106,7 +112,7 @@ int main(int argc, char** argv) {
               << std::endl;
   }
 
-  if (args.print_output) {
+  if (opts.print_output) {
     std::cout << std::left;
     std::cout << std::setw(10) << "Vertex" << std::setw(10) << "Distance" << std::endl;
     for (size_t i = 0; i < G.getVertexCount(); i++) {
