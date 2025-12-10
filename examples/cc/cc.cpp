@@ -3,6 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 #include "../include/utils.hpp"
+#include <CLI/CLI.hpp>
 #include <chrono>
 #include <iomanip>
 #include <iostream>
@@ -16,11 +17,15 @@ bool validate(const GraphT& graph, CCT& cc, uint source) {
 
 int main(int argc, char** argv) {
   using type_t = unsigned int;
-  ArgsT<type_t> args{argc, argv};
+  GraphOptions opts;
+  CLI::App app{"SYgraph example"};
+  auto source_option = configureBaseCLI(app, opts);
+  CLI11_PARSE(app, argc, argv);
+  finalizeGraphOptions(opts, source_option);
 
   std::cerr << "[*] Reading CSR" << std::endl;
   sygraph::graph::Properties properties;
-  auto csr = readCSR<type_t, type_t, type_t>(args, &properties);
+  auto csr = readCSR<type_t, type_t, type_t>(opts, &properties);
 
 #ifdef ENABLE_PROFILING
   sycl::queue q{sycl::gpu_selector_v, sycl::property::queue::enable_profiling()};
@@ -36,18 +41,19 @@ int main(int argc, char** argv) {
   size_t size = G.getVertexCount();
 
   sygraph::algorithms::CC cc{G};
-  if (args.random_source) { args.source = getRandomSource(size); }
-  cc.init(args.source);
+  if (opts.random_source) { opts.source = getRandomSource(size); }
+  type_t cc_source = static_cast<type_t>(opts.source);
+  cc.init(cc_source);
 
-  std::cout << "[*] Running CC on source " << args.source << std::endl;
+  std::cout << "[*] Running CC on source " << opts.source << std::endl;
   cc.run<true>();
 
   std::cerr << "[!] Done" << std::endl;
 
-  if (args.validate) {
+  if (opts.validate) {
     std::cout << "Validation: [";
     auto validation_start = std::chrono::high_resolution_clock::now();
-    if (!validate(G, cc, args.source)) {
+    if (!validate(G, cc, opts.source)) {
       std::cout << failString();
     } else {
       std::cout << successString();
