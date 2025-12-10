@@ -215,6 +215,7 @@ public:
         if (group.leader() && !check_acc[0] && tmp) check_acc[0] = true;
       });
     });
+    e.wait();
 #ifdef ENABLE_PROFILING
     sygraph::Profiler::addEvent(e, "isFrontierEmpty");
 #endif
@@ -229,27 +230,34 @@ public:
       cgh.single_task([=]() { check_acc[0] = bitmap.check(idx); });
     });
     e.wait();
+#ifdef ENABLE_PROFILING
+    sygraph::Profiler::addEvent(e, "checkFrontierElement");
+#endif
     sycl::host_accessor check_acc(check_buf);
     return check_acc[0];
   }
 
   bool insert(size_t idx) {
-    _queue
-        .submit([&](sycl::handler& cgh) {
-          auto bitmap = this->getDeviceFrontier();
-          cgh.single_task([=]() { bitmap.insert(idx); });
-        })
-        .wait();
+    auto e = _queue.submit([&](sycl::handler& cgh) {
+      auto bitmap = this->getDeviceFrontier();
+      cgh.single_task([=]() { bitmap.insert(idx); });
+    });
+    e.wait();
+#ifdef ENABLE_PROFILING
+    sygraph::Profiler::addEvent(e, "insertFrontierElement");
+#endif
     return true;
   }
 
   bool remove(size_t idx) {
-    _queue
-        .submit([&](sycl::handler& cgh) {
-          auto bitmap = this->getDeviceFrontier();
-          cgh.single_task([=]() { bitmap.remove(idx); });
-        })
-        .wait();
+    auto e = _queue.submit([&](sycl::handler& cgh) {
+      auto bitmap = this->getDeviceFrontier();
+      cgh.single_task([=]() { bitmap.remove(idx); });
+    });
+    e.wait();
+#ifdef ENABLE_PROFILING
+    sygraph::Profiler::addEvent(e, "removeFrontierElement");
+#endif
     return true;
   }
 
@@ -257,7 +265,7 @@ public:
     sycl::buffer<size_t, 1> size_buf(sycl::range<1>(1));
     size_t frontier_size = this->getBitmapSize();
     size_t bitmap_range = this->getBitmapRange();
-    _queue.submit([&](sycl::handler& cgh) {
+    auto e = _queue.submit([&](sycl::handler& cgh) {
       auto bitmap = this->getDeviceFrontier();
       auto size_acc = size_buf.get_access<sycl::access::mode::write>(cgh);
       cgh.parallel_for<compute_size_mlb_frontier_kernel>(sycl::range<1>{frontier_size}, [=](sycl::id<1> idx) {
@@ -271,7 +279,10 @@ public:
         ref += num_active_nodes;
       });
     });
-    _queue.wait();
+    e.wait();
+#ifdef ENABLE_PROFILING
+    sygraph::Profiler::addEvent(e, "computeFrontierSize");
+#endif
     sycl::host_accessor<size_t, 1> size_acc(size_buf);
     return size_acc[0];
   }
@@ -279,48 +290,80 @@ public:
   // operator =
   FrontierMLB& operator=(const FrontierMLB& other) {
     if (this == &other) { return *this; }
-    _queue.copy(other._bitmap.getData(), this->_bitmap.getData(), _bitmap.getBitmapSize()).wait();
+    auto e = _queue.copy(other._bitmap.getData(), this->_bitmap.getData(), _bitmap.getBitmapSize());
+    e.wait();
+#ifdef ENABLE_PROFILING
+    sygraph::Profiler::addEvent(e, "copyFrontier");
+#endif
     return *this;
   }
 
-  sygraph::Event merge(FrontierMLB<T>& other) {
-    return _queue.submit([&](sycl::handler& cgh) {
+  void merge(FrontierMLB<T>& other) {
+    auto e = _queue.submit([&](sycl::handler& cgh) {
       auto bitmap = this->getDeviceFrontier();
       auto other_bitmap = other.getDeviceFrontier();
       cgh.parallel_for<merge_mlb_frontier_kernel>(sycl::range<1>(bitmap.getBitmapSize()),
                                                   [=](sycl::id<1> idx) { bitmap.getData()[idx] |= other_bitmap.getData()[idx]; });
     });
+    e.wait();
+#ifdef ENABLE_PROFILING
+    sygraph::Profiler::addEvent(e, "mergeFrontier");
+#endif
   }
 
-  sygraph::Event intersect(FrontierMLB<T>& other) {
-    return _queue.submit([&](sycl::handler& cgh) {
+  void intersect(FrontierMLB<T>& other) {
+    auto e = _queue.submit([&](sycl::handler& cgh) {
       auto bitmap = this->getDeviceFrontier();
       auto other_bitmap = other.getDeviceFrontier();
       cgh.parallel_for<intersect_mlb_frontier_kernel>(sycl::range<1>(bitmap.getBitmapSize()),
                                                       [=](sycl::id<1> idx) { bitmap.getData()[idx] &= other_bitmap.getData()[idx]; });
     });
+    e.wait();
+#ifdef ENABLE_PROFILING
+    sygraph::Profiler::addEvent(e, "intersectFrontier");
+#endif
   }
 
   sygraph::frontier::detail::BitmapState<Levels, bitmap_type> saveState() {
     sygraph::frontier::detail::BitmapState<Levels, bitmap_type> state;
+#pragma unroll
     for (size_t i = 0; i < Levels; i++) {
       state.size[i] = _bitmap.getBitmapSize(i);
       state.data[i].resize(state.size[i]);
-      _queue.copy(_bitmap.getData(i), state.data[i].data(), state.size[i]);
+      auto e = _queue.copy(_bitmap.getData(i), state.data[i].data(), state.size[i]);
+#ifdef ENABLE_PROFILING
+      sygraph::Profiler::addEvent(e, "saveFrontierState_level_" + std::to_string(i));
+#endif
     }
+
+    _queue.wait();
     return state;
   }
 
   void loadState(const sygraph::frontier::detail::BitmapState<Levels, bitmap_type>& state) {
+#pragma unroll
     for (size_t i = 0; i < Levels; i++) {
       assert(state.size[i] == _bitmap.getBitmapSize(i));
-      _queue.copy(state.data[i].data(), _bitmap.getData(i), state.size[i]);
+      auto e = _queue.copy(state.data[i].data(), _bitmap.getData(i), state.size[i]);
+#ifdef ENABLE_PROFILING
+      sygraph::Profiler::addEvent(e, "loadFrontierState_level_" + std::to_string(i));
+#endif
     }
+    _queue.wait();
   }
 
   void clear() {
-    for (size_t i = 0; i < Levels; i++) { _queue.fill(_bitmap.getData(i), static_cast<bitmap_type>(0), _bitmap.getBitmapSize(i)); }
-    _queue.fill(_bitmap.getOffsetsSize(), static_cast<uint32_t>(0), 1);
+    sycl::event e;
+    for (size_t i = 0; i < Levels; i++) {
+      e = _queue.fill(_bitmap.getData(i), static_cast<bitmap_type>(0), _bitmap.getBitmapSize(i));
+#ifdef ENABLE_PROFILING
+      sygraph::Profiler::addEvent(e, "clearFrontierLevel_" + std::to_string(i));
+#endif
+    }
+    e = _queue.fill(_bitmap.getOffsetsSize(), static_cast<uint32_t>(0), 1);
+#ifdef ENABLE_PROFILING
+    sygraph::Profiler::addEvent(e, "clearFrontierOffsets");
+#endif
     _queue.wait();
   }
 
