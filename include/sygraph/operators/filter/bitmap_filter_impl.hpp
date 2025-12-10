@@ -24,6 +24,32 @@ namespace detail {
 class inplace_filter_kernel;
 class external_filter_kernel;
 
+template<graph::detail::GraphConcept GraphT, typename InFrontierT>
+sygraph::detail::kernel::LaunchConfig buildLaunchConfig(const GraphT& graph, const InFrontierT& in, int expected_size, sycl::queue& q) {
+  sygraph::detail::kernel::LaunchConfig config{};
+  auto in_dev_frontier = in.getDeviceFrontier();
+  uint32_t active_size = 0;
+  size_t requested_global = 0;
+
+  config.local = {in.getBitmapRange()};
+
+  if (expected_size != frontier::size::fetch_from_memory) {
+    throw std::runtime_error("Invalid expected_size value. Only fetch_from_memory is supported for filter operation.");
+  }
+
+  config.dependency = in.computeActiveFrontier();
+  config.dependency.wait_and_throw();
+  auto copy_e = q.copy(in_dev_frontier.getOffsetsSize(), &active_size, 1);
+  copy_e.wait();
+#ifdef ENABLE_PROFILING
+  sygraph::Profiler::addEvent(copy_e, "frontier_size_fetch");
+#endif
+  const size_t bitmap_range = in.getBitmapRange();
+  requested_global = static_cast<size_t>(active_size) * bitmap_range;
+  config.global = {sygraph::detail::kernel::ensureLocalMultiple(requested_global, config.local[0])};
+  return config;
+}
+
 template<graph::detail::GraphConcept GraphT, typename T, sygraph::frontier::frontier_type FT, typename LambdaT>
 sygraph::Event
 launchBitmapKernelExternal(GraphT& graph, const sygraph::frontier::Frontier<T, FT>& in, sygraph::frontier::Frontier<T, FT>& out, LambdaT&& functor) {
@@ -35,8 +61,7 @@ launchBitmapKernelExternal(GraphT& graph, const sygraph::frontier::Frontier<T, F
 
   size_t num_nodes = graph.getVertexCount();
 
-  size_t bitmap_range = in.getBitmapRange();
-  size_t offsets_size = in.computeActiveFrontier();
+  auto config = buildLaunchConfig(graph, in, frontier::size::fetch_from_memory, q);
 
   out.clear();
 
@@ -44,13 +69,10 @@ launchBitmapKernelExternal(GraphT& graph, const sygraph::frontier::Frontier<T, F
 
   auto out_dev = out.getDeviceFrontier();
   auto in_dev = in.getDeviceFrontier();
+  uint8_t bitmap_range = in_dev.getBitmapRange();
 
   sygraph::Event e = q.submit([&](sycl::handler& cgh) {
-    sycl::range<1> local_range{bitmap_range};
-    size_t global_size = offsets_size * local_range[0];
-    sycl::range<1> global_range{global_size > local_range[0] ? global_size + (local_range[0] - (global_size % local_range[0])) : local_range[0]};
-
-    cgh.parallel_for<external_filter_kernel>(sycl::nd_range<1>{global_range, local_range}, [=](sycl::nd_item<1> item) {
+    cgh.parallel_for<external_filter_kernel>(sycl::nd_range<1>{config.global, config.local}, [=](sycl::nd_item<1> item) {
       auto lid = item.get_local_id();
       auto group_id = item.get_group_linear_id();
       auto local_size = item.get_local_range()[0];
@@ -76,17 +98,14 @@ sygraph::Event launchBitmapKernelInplace(GraphT& graph, const sygraph::frontier:
 
   size_t num_nodes = graph.getVertexCount();
 
+  auto config = buildLaunchConfig(graph, frontier, frontier::size::fetch_from_memory, q);
+
   size_t bitmap_range = frontier.getBitmapRange();
-  size_t offsets_size = frontier.computeActiveFrontier();
 
   using type_t = T;
 
   sygraph::Event e = q.submit([&](sycl::handler& cgh) {
-    sycl::range<1> local_range{bitmap_range};
-    size_t global_size = offsets_size * local_range[0];
-    sycl::range<1> global_range{global_size > local_range[0] ? global_size + (local_range[0] - (global_size % local_range[0])) : local_range[0]};
-
-    cgh.parallel_for<inplace_filter_kernel>(sycl::nd_range<1>{global_range, local_range}, [=](sycl::nd_item<1> item) {
+    cgh.parallel_for<inplace_filter_kernel>(sycl::nd_range<1>{config.global, config.local}, [=](sycl::nd_item<1> item) {
       auto lid = item.get_local_id();
       auto group_id = item.get_group_linear_id();
       auto local_size = item.get_local_range()[0];

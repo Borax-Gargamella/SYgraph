@@ -31,6 +31,7 @@
 // Include operators
 #include <sygraph/operators/advance/advance.hpp>
 #include <sygraph/operators/config.hpp>
+#include <sygraph/operators/filter/filter.hpp>
 #include <sygraph/operators/for/for.hpp>
 #include <sygraph/operators/intersection/intersection.hpp>
 
