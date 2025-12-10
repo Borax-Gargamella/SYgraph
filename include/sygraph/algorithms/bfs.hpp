@@ -23,6 +23,8 @@
  */
 namespace sygraph {
 namespace algorithms {
+
+enum class BFSDirection { push, pull, hybrid };
 namespace detail {
 /**
  * @brief Represents an instance of the Breadth-First Search (BFS) algorithm on a graph.
@@ -127,8 +129,7 @@ public:
    * @tparam EnableProfiling A boolean flag to enable profiling.
    * @throws std::runtime_error if the BFS instance is not initialized.
    */
-  template<bool EnableProfiling = false>
-  void run() {
+  void run(BFSDirection direction = BFSDirection::push) {
     if (!_instance) { throw std::runtime_error("BFS instance not initialized"); }
 
     auto& G = _instance->G;
@@ -149,25 +150,60 @@ public:
     in_frontier.insert(source);
 
     size_t size = G.getVertexCount();
+    auto g_device = G.getDeviceGraph();
     int iter = 0;
 
-    // TODO: Add automatic load_balancing for the type of graph.
-    while (!in_frontier.empty()) {
-      auto e1 = sygraph::operators::advance::frontier<load_balance_t::workgroup_mapped, frontier_view_t::vertex, frontier_view_t::vertex>(
-          G, in_frontier, out_frontier, [=](auto src, auto dst, auto edge, auto weight) -> bool {
+    sygraph::Event e;
+
+    auto push_step = [&]() {
+      return sygraph::operators::advance::frontier<load_balance_t::workgroup_mapped, frontier_view_t::vertex, frontier_view_t::vertex>(
+          G,
+          in_frontier,
+          out_frontier,
+          [=](auto src, auto dst, auto edge, auto weight) -> bool {
             if (distances[dst] == size + 1) {
               distances[dst] = iter + 1;
-              parents[dst] = src;
               return true;
             }
             return false;
-          });
-      e1.waitAndThrow();
+          },
+          sygraph::operators::frontier_size::infer_from_device);
+    };
 
+    auto pull_step = [&]() {
+      return sygraph::operators::advance::
+          frontier<direction_t::pull, load_balance_t::workgroup_mapped, frontier_view_t::vertex, frontier_view_t::vertex>(
+              G,
+              in_frontier,
+              out_frontier,
+              [=](auto src, auto dst, auto edge, auto weight) -> bool {
+                if (distances[src] == size + 1 && distances[dst] == iter) {
+                  distances[src] = iter + 1;
+                  return true;
+                }
+                return false;
+              },
+              sygraph::operators::frontier_size::infer_from_device);
+    };
+
+    while (!in_frontier.empty()) {
+      if (direction == BFSDirection::push) {
+        e = push_step();
+      } else if (direction == BFSDirection::pull) {
+        e = pull_step();
+      } else {
+        // Hybrid BFS: choose between push and pull based on frontier size
+        if (in_frontier.size() < G.getVertexCount() / 20) {
+          e = push_step();
+        } else {
+          e = pull_step();
+        }
+      }
+
+      e.waitAndThrow();
 #ifdef ENABLE_PROFILING
-      sygraph::Profiler::addEvent(e1, "advance");
+      sygraph::Profiler::addEvent(e, "advance");
 #endif
-
       sygraph::frontier::swap(in_frontier, out_frontier);
       out_frontier.clear();
       iter++;
@@ -194,7 +230,7 @@ public:
   std::vector<edge_t> getDistances() const {
     std::vector<edge_t> distances(_instance->G.getVertexCount());
     sycl::queue& queue = _instance->G.getQueue();
-    queue.memcpy(distances.data(), _instance->distances, distances.size() * sizeof(edge_t)).wait();
+    queue.copy(_instance->distances, distances.data(), distances.size()).wait();
     return distances;
   }
 
@@ -214,7 +250,7 @@ public:
   std::vector<vertex_t> getParents() const {
     std::vector<vertex_t> parents(_instance->G.getVertexCount());
     sycl::queue& queue = _instance->G.getQueue();
-    queue.memcpy(parents.data(), _instance->parents, parents.size() * sizeof(vertex_t)).wait();
+    queue.copy(_instance->parents, parents.data(), parents.size()).wait();
     return parents;
   }
 
