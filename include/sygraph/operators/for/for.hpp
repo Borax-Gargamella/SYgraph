@@ -53,6 +53,28 @@ sygraph::Event execute(GraphT& graph,
   return sygraph::operators::compute::detail::launchBitmapKernel<FW>(graph, frontier, std::forward<LambdaT>(functor), expected_size);
 }
 
+/**
+ * @brief Reduces values over a graph and its frontier using a specified reduction operator.
+ *
+ * This function launches a kernel to perform reduction operations on the graph
+ * using the provided frontier, reduction operator, and accumulator.
+ *
+ * @tparam FW The frontier view type.
+ * @tparam ReductionOperator The type of the reduction operator.
+ * @tparam GraphT The type of the graph, which must satisfy the GraphConcept.
+ * @tparam T The type of the elements in the frontier.
+ * @tparam R The type of the accumulator.
+ * @tparam FT The type of the frontier.
+ * @tparam LambdaT The type of the function to be executed for reduction.
+ *
+ * @param graph The graph on which the reduction is to be performed.
+ * @param frontier The frontier containing the elements to be processed.
+ * @param accumulator The accumulator to store the reduced result.
+ * @param function The function to be executed for reduction.
+ * @param expected_size An optional parameter specifying the expected size of the frontier.
+ *
+ * @return An Event object representing the execution of the reduction operation.
+ */
 template<frontier::frontier_view FW,
          typename ReductionOperator,
          graph::detail::GraphConcept GraphT,
