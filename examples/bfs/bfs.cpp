@@ -106,7 +106,9 @@ int main(int argc, char** argv) {
   bfs.init(bfs_source);
 
   std::cout << "[*] Running BFS (" << directionToString(advance_direction) << " advance) on source " << opts.source << std::endl;
+  auto start_timer = std::chrono::high_resolution_clock::now();
   bfs.run(advance_direction);
+  auto end_timer = std::chrono::high_resolution_clock::now();
 
   std::cerr << "[!] Done" << std::endl;
 
@@ -139,4 +141,6 @@ int main(int argc, char** argv) {
 #ifdef ENABLE_PROFILING
   sygraph::Profiler::print();
 #endif
+  std::cout << "Total Host Time: " << std::chrono::duration_cast<std::chrono::milliseconds>(end_timer - start_timer).count() << " ms" << std::endl;
+  return 0;
 }
