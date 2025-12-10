@@ -251,9 +251,9 @@ buildLaunchConfig(GraphT& graph, const InFrontierT& in, bool pull_advance, int e
     size_t requested_global = 0;
     if (expected_size > 0) {
       requested_global = static_cast<size_t>(expected_size);
-    } else if (expected_size == frontier_size::infer_from_device) {
+    } else if (expected_size == frontier::size::infer_from_device) {
       requested_global = config.local[0] * (sygraph::detail::device::getNumComputeUnits(q) * coarsening_factor);
-    } else if (expected_size == frontier_size::fetch_from_memory) {
+    } else if (expected_size == frontier::size::fetch_from_memory) {
       config.dependency.wait_and_throw();
       uint32_t active_size = 0;
       auto copy_e = q.copy(in_dev_frontier.getOffsetsSize(), &active_size, 1);

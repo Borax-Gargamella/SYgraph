@@ -167,7 +167,7 @@ public:
             }
             return false;
           },
-          sygraph::operators::frontier_size::infer_from_device);
+          sygraph::frontier::size::fetch_from_memory);
     };
 
     auto pull_step = [&]() {
@@ -183,7 +183,7 @@ public:
                 }
                 return false;
               },
-              sygraph::operators::frontier_size::infer_from_device);
+              sygraph::frontier::size::fetch_from_memory);
     };
 
     while (!in_frontier.empty()) {

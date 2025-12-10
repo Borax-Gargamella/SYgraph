@@ -33,7 +33,7 @@ inline sygraph::detail::kernel::LaunchConfig buildLaunchConfig(const GraphT& gra
   size_t requested_global = 0;
 
   if constexpr (FW != sygraph::frontier::frontier_view::vertex) { throw std::runtime_error("Invalid frontier view for compute operation."); }
-  if (expected_size != operators::frontier_size::fetch_from_memory) {
+  if (expected_size != frontier::size::fetch_from_memory) {
     throw std::runtime_error("Invalid expected_size value. Only fetch_from_memory is supported for compute operation.");
   }
 

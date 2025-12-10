@@ -46,8 +46,10 @@ concept ReducerT = std::same_as<T, sycl::plus<R>> || std::same_as<T, sycl::multi
  * @return An Event object representing the execution of the functor.
  */
 template<frontier::frontier_view FW, graph::detail::GraphConcept GraphT, typename T, typename LambdaT, frontier::frontier_type FT>
-sygraph::Event
-execute(GraphT& graph, const sygraph::frontier::Frontier<T, FT>& frontier, LambdaT&& functor, int expected_size = frontier_size::fetch_from_memory) {
+sygraph::Event execute(GraphT& graph,
+                       const sygraph::frontier::Frontier<T, FT>& frontier,
+                       LambdaT&& functor,
+                       frontier::size::frontier_size_t expected_size = frontier::size::fetch_from_memory) {
   return sygraph::operators::compute::detail::launchBitmapKernel<FW>(graph, frontier, std::forward<LambdaT>(functor), expected_size);
 }
 
@@ -63,7 +65,7 @@ sygraph::Event reduce(GraphT& graph,
                       const sygraph::frontier::Frontier<T, FT>& frontier,
                       R& accumulator,
                       LambdaT&& function,
-                      int expected_size = frontier_size::fetch_from_memory) {
+                      frontier::size::frontier_size_t expected_size = frontier::size::fetch_from_memory) {
   return sygraph::operators::compute::detail::launchBitmapReduce<FW>(graph, frontier, accumulator, std::forward<LambdaT>(function), expected_size);
 }
 

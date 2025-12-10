@@ -17,13 +17,15 @@ enum class direction {
   push,
   pull,
 };
-
-namespace frontier_size {
-
-constexpr int fetch_from_memory = -1; // Fetch the frontier size from memory
-constexpr int infer_from_device = 0;  // Infer the frontier size from the device
-
-} // namespace frontier_size
-
 } // namespace operators
+
+namespace frontier::size {
+
+using frontier_size_t = int;
+
+constexpr frontier_size_t fetch_from_memory = -1; // Fetch the frontier size from memory. Requires a device-to-host copy.
+constexpr frontier_size_t infer_from_device = 0;  // Infer the frontier size from the device. Uses the number of compute units of the device.
+
+} // namespace frontier::size
+
 } // namespace sygraph
