@@ -14,6 +14,7 @@
 #include <sygraph/utils/profiler.hpp>
 #endif
 #include <memory>
+#include <set>
 
 /**
  * @namespace sygraph
@@ -25,6 +26,13 @@ namespace sygraph {
 namespace algorithms {
 
 enum class BFSDirection { push, pull, hybrid };
+
+struct BFSRunDetails {
+  size_t iterations = 0;
+  std::set<size_t> push_steps;
+  std::set<size_t> pull_steps;
+};
+
 namespace detail {
 /**
  * @brief Represents an instance of the Breadth-First Search (BFS) algorithm on a graph.
@@ -126,10 +134,14 @@ public:
   /**
    * @brief Runs the BFS algorithm.
    *
+   * @param direction The direction of the BFS traversal (push, pull, or hybrid).
+   * @param alpha The alpha parameter for the hybrid BFS heuristic. Used to switch from push to pull.
+   * @param beta The beta parameter for the hybrid BFS heuristic. Used to switch from pull to push.
    * @tparam EnableProfiling A boolean flag to enable profiling.
    * @throws std::runtime_error if the BFS instance is not initialized.
    */
-  void run(BFSDirection direction = BFSDirection::push) {
+  BFSRunDetails run(BFSDirection direction = BFSDirection::push, float alpha = 1.0f, float beta = 1.0f) {
+    BFSRunDetails details;
     if (!_instance) { throw std::runtime_error("BFS instance not initialized"); }
 
     auto& G = _instance->G;
@@ -186,24 +198,23 @@ public:
               sygraph::frontier::size::infer_from_device);
     };
 
-    while (!in_frontier.empty()) {
-      if (direction == BFSDirection::push) {
-        e = push_step();
-      } else if (direction == BFSDirection::pull) {
-        e = pull_step();
-      } else {
-        // Hybrid BFS: choose between push and pull based on frontier size
-        if (in_frontier.size() < G.getVertexCount() / 20) {
-          e = push_step();
-        } else {
-          e = pull_step();
-        }
-      }
+    bool push = direction != BFSDirection::pull;
+    size_t n_push_step = 0;
+    size_t n_pull_step = 0;
 
+    while (!in_frontier.empty()) {
+      if (push) {
+        e = push_step();
+        details.push_steps.insert(iter);
+      } else {
+        e = pull_step();
+        details.pull_steps.insert(iter);
+      }
       e.waitAndThrow();
 #ifdef ENABLE_PROFILING
       sygraph::Profiler::addEvent(e, "advance");
 #endif
+      evaluateHeuristic(alpha, beta, out_frontier, direction, push);
       sygraph::frontier::swap(in_frontier, out_frontier);
       out_frontier.clear();
       iter++;
@@ -212,6 +223,8 @@ public:
 #ifdef ENABLE_PROFILING
     sygraph::Profiler::addVisitedEdges(_instance->getVisitedEdges());
 #endif
+    details.iterations = iter;
+    return details;
   }
 
   /**
@@ -257,6 +270,74 @@ public:
 private:
   GraphType& _g;
   std::unique_ptr<detail::BFSInstance<GraphType>> _instance;
+
+  template<typename F>
+  size_t fetchFrontierDegree(const F& frontier) {
+    size_t total_degree = 0;
+    auto& G = _instance->G;
+    auto g_device = G.getDeviceGraph();
+
+    auto e = sygraph::operators::compute::reduce<sygraph::frontier::frontier_view::vertex, sycl::plus<size_t>>(
+        G, frontier, total_degree, [=](auto v, auto& accumulator) { accumulator += g_device.getDegree(v); });
+    e.waitAndThrow();
+#ifdef ENABLE_PROFILING
+    sygraph::Profiler::addEvent(e, "computeFrontierDegree");
+#endif
+    return total_degree;
+  }
+
+  uint32_t fetchUnexploredDegree() {
+    auto& G = _instance->G;
+    sycl::queue& queue = G.getQueue();
+    auto g_device = G.getDeviceGraph();
+
+    sycl::buffer<uint32_t, 1> degree_buf(sycl::range<1>(1));
+
+    auto distances = _instance->distances;
+    size_t nodes = G.getVertexCount();
+
+    auto e = queue.submit([&](sycl::handler& cgh) {
+      auto sum_reduction = sycl::reduction<uint32_t>(degree_buf, cgh, sycl::plus<uint32_t>());
+
+      cgh.parallel_for<class compute_unexplored_degree_kernel>(sycl::range<1>(nodes), sum_reduction, [=](sycl::id<1> idx, auto& sum) {
+        size_t vertex = idx[0];
+        if (distances[vertex] == nodes + 1) { sum += static_cast<uint32_t>(g_device.getDegree(vertex)); }
+      });
+    });
+    e.wait();
+#ifdef ENABLE_PROFILING
+    sygraph::Profiler::addEvent(e, "computeUnexploredDegree");
+#endif
+    auto degree_host = degree_buf.get_host_access();
+    return degree_host[0];
+  }
+
+  template<typename F>
+  bool shouldSwitchToPull(const F& frontier, float alpha) {
+    uint32_t frontier_degree = fetchFrontierDegree(frontier);
+    uint32_t unexplored_degree = fetchUnexploredDegree();
+
+    return frontier_degree > (unexplored_degree / alpha);
+  }
+
+  template<typename F>
+  bool shouldSwitchToPush(const F& frontier, float beta) {
+    auto& G = _instance->G;
+    auto frontier_size = frontier.size();
+    auto total_nodes = G.getVertexCount();
+    return frontier_size < (total_nodes / beta);
+  }
+
+  template<typename F>
+  void evaluateHeuristic(const float alpha, const float beta, const F& frontier, BFSDirection direction, bool& push) {
+    if (direction == BFSDirection::hybrid) {
+      if (push) {
+        if (shouldSwitchToPull(frontier, alpha)) { push = false; }
+      } else {
+        if (shouldSwitchToPush(frontier, beta)) { push = true; }
+      }
+    }
+  }
 };
 
 } // namespace algorithms

@@ -71,14 +71,44 @@ sygraph::algorithms::BFSDirection parseAdvanceDirection(std::string value) {
   return sygraph::algorithms::BFSDirection::push;
 }
 
+void printAdvanceDetails(const sygraph::algorithms::BFSRunDetails& details) {
+  std::cout << "(";
+
+  int push_count = 0;
+  int pull_count = 0;
+  for (int i = 0; i < details.iterations; i++) {
+    if (details.push_steps.find(i) != details.push_steps.end()) {
+      if (pull_count > 0) {
+        std::cout << "pull x" << pull_count << ", ";
+        pull_count = 0;
+      }
+      push_count++;
+    } else if (details.pull_steps.find(i) != details.pull_steps.end()) {
+      pull_count++;
+      if (push_count > 0) {
+        std::cout << "push x" << push_count << ", ";
+        push_count = 0;
+      }
+    }
+  }
+  if (push_count > 0) { std::cout << "push x" << push_count; }
+  if (pull_count > 0) { std::cout << "pull x" << pull_count; };
+  std::cout << ")" << std::endl;
+}
+
 int main(int argc, char** argv) {
   using type_t = unsigned int;
   GraphOptions opts;
   CLI::App app{"SYgraph example"};
   auto source_option = configureBaseCLI(app, opts);
   std::string advance_mode = "push";
+  float alpha = 15.0f;
+  float beta = 24.0f;
+
   app.add_option("--advance", advance_mode, "Select BFS advance strategy (push|pull|hybrid)")
       ->check(CLI::IsMember({"push", "pull", "hybrid"}, CLI::ignore_case));
+  app.add_option("--alpha", alpha, "Alpha parameter for hybrid BFS")->check(CLI::PositiveNumber);
+  app.add_option("--beta", beta, "Beta parameter for hybrid BFS")->check(CLI::PositiveNumber);
   CLI11_PARSE(app, argc, argv);
   finalizeGraphOptions(opts, source_option);
   auto advance_direction = parseAdvanceDirection(advance_mode);
@@ -105,12 +135,21 @@ int main(int argc, char** argv) {
   type_t bfs_source = static_cast<type_t>(opts.source);
   bfs.init(bfs_source);
 
-  std::cout << "[*] Running BFS (" << directionToString(advance_direction) << " advance) on source " << opts.source << std::endl;
+  std::cout << "[*] Running BFS (" << directionToString(advance_direction) << " advance";
+  if (advance_direction == sygraph::algorithms::BFSDirection::hybrid) { std::cout << ", alpha=" << alpha << ", beta=" << beta; }
+  std::cout << ") from source vertex " << bfs_source << std::endl;
   auto start_timer = std::chrono::high_resolution_clock::now();
-  bfs.run(advance_direction);
+  auto details = bfs.run(advance_direction, alpha, beta);
   auto end_timer = std::chrono::high_resolution_clock::now();
 
   std::cerr << "[!] Done" << std::endl;
+
+  std::cerr << "Iterations: " << details.iterations << std::endl;
+  if (advance_direction == sygraph::algorithms::BFSDirection::hybrid) {
+    std::cerr << "Push steps: " << details.push_steps.size() << std::endl;
+    std::cerr << "Pull steps: " << details.pull_steps.size() << std::endl;
+    printAdvanceDetails(details);
+  }
 
   if (opts.validate) {
     std::cout << "Validation: [";
