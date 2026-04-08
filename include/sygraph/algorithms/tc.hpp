@@ -36,7 +36,7 @@ struct TCInstance {
 
   ~TCInstance() {
     sycl::queue& queue = G.getQueue();
-    sycl::free(triangles, queue);
+    memory::detail::releaseUSM(triangles, queue);
   }
 
 

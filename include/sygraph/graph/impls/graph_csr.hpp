@@ -4,6 +4,7 @@
  */
 #pragma once
 
+#include "sygraph/graph/graph.hpp"
 #include <sygraph/formats/csr.hpp>
 #include <sygraph/utils/memory.hpp>
 
@@ -166,68 +167,39 @@ public:
    * @param csr The CSR format of the graph.
    * @param properties The properties of the graph.
    */
-  GraphCSR(sycl::queue& q, formats::CSR<ValueT, IndexT, OffsetT>& csr, Properties properties)
-      : Graph<IndexT, OffsetT, ValueT>(properties), _queue(q), _csr(csr) {
-    IndexT n_rows = csr.getRowOffsetsSize();
-    OffsetT n_nonzeros = csr.getNumNonzeros();
-    IndexT* row_offsets = memory::detail::memoryAlloc<IndexT, Space>(n_rows + 1, _queue);
-    OffsetT* column_indices = memory::detail::memoryAlloc<OffsetT, Space>(n_nonzeros, _queue);
-    ValueT* nnz_values = memory::detail::memoryAlloc<ValueT, Space>(n_nonzeros, _queue);
-
-    auto e1 = _queue.copy(csr.getRowOffsets().data(), row_offsets, n_rows + 1);
-    auto e2 = _queue.copy(csr.getColumnIndices().data(), column_indices, n_nonzeros);
-    auto e3 = _queue.copy(csr.getValues().data(), nnz_values, n_nonzeros);
-    e1.wait();
-    e2.wait();
-    e3.wait();
-
-    this->_device_graph = {n_rows, n_nonzeros, column_indices, row_offsets, nnz_values};
-
-    if (properties.directed) {
-      formats::CSR<ValueT, IndexT, OffsetT> inverted_csr = csr.invert();
-
-      IndexT* inv_row_offsets = memory::detail::memoryAlloc<IndexT, Space>(n_rows + 1, _queue);
-      OffsetT* inv_column_indices = memory::detail::memoryAlloc<OffsetT, Space>(n_nonzeros, _queue);
-      ValueT* inv_nnz_values = memory::detail::memoryAlloc<ValueT, Space>(n_nonzeros, _queue);
-      auto e4 = _queue.copy(inverted_csr.getRowOffsets().data(), inv_row_offsets, n_rows + 1);
-      auto e5 = _queue.copy(inverted_csr.getColumnIndices().data(), inv_column_indices, n_nonzeros);
-      auto e6 = _queue.copy(inverted_csr.getValues().data(), inv_nnz_values, n_nonzeros);
-      e4.wait();
-      e5.wait();
-      e6.wait();
-      this->_inverse_device_graph = {n_rows, n_nonzeros, inv_column_indices, inv_row_offsets, inv_nnz_values};
-    } else {
-      this->_inverse_device_graph = this->_device_graph;
-    }
+  GraphCSR(sycl::queue& q, const formats::CSR<ValueT, IndexT, OffsetT>& csr, Properties properties)
+      : Graph<IndexT, OffsetT, ValueT>(properties), _queue(q), _csr(csr), _owns_inverse_graph(properties.directed) {
+    initializeGraphStorage(_csr, properties);
   }
+
+  GraphCSR(sycl::queue& q, formats::CSR<ValueT, IndexT, OffsetT>&& csr, Properties properties)
+      : Graph<IndexT, OffsetT, ValueT>(properties), _queue(q), _csr(std::move(csr)), _owns_inverse_graph(properties.directed) {
+    initializeGraphStorage(_csr, properties);
+  }
+
+  GraphCSR(const GraphCSR&) = delete;
+  GraphCSR& operator=(const GraphCSR&) = delete;
+
+  GraphCSR(GraphCSR&& other) noexcept
+      : Graph<IndexT, OffsetT, ValueT>(other.getProperties()), _queue(other._queue), _csr(std::move(other._csr)), _device_graph(other._device_graph),
+        _inverse_device_graph(other._inverse_device_graph), _owns_inverse_graph(other._owns_inverse_graph) {
+    other._device_graph = {};
+    other._inverse_device_graph = {};
+    other._owns_inverse_graph = false;
+  }
+
+  GraphCSR& operator=(GraphCSR&&) = delete;
 
   /**
    * @brief Destroys the graph_csr_t object and frees the allocated memory.
    */
   ~GraphCSR() {
-    if (_device_graph._row_offsets != nullptr) {
-      sycl::free(_device_graph._row_offsets, _queue);
-      _device_graph._row_offsets = nullptr;
-    }
-    if (_device_graph._column_indices != nullptr) {
-      sycl::free(_device_graph._column_indices, _queue);
-      _device_graph._column_indices = nullptr;
-    }
-    if (_device_graph._nnz_values != nullptr) {
-      sycl::free(_device_graph._nnz_values, _queue);
-      _device_graph._nnz_values = nullptr;
-    }
-    if (_inverse_device_graph._row_offsets != nullptr) {
-      sycl::free(_inverse_device_graph._row_offsets, _queue);
-      _inverse_device_graph._row_offsets = nullptr;
-    }
-    if (_inverse_device_graph._column_indices != nullptr) {
-      sycl::free(_inverse_device_graph._column_indices, _queue);
-      _inverse_device_graph._column_indices = nullptr;
-    }
-    if (_inverse_device_graph._nnz_values != nullptr) {
-      sycl::free(_inverse_device_graph._nnz_values, _queue);
-      _inverse_device_graph._nnz_values = nullptr;
+    releaseGraphStorage(_device_graph);
+
+    if (_owns_inverse_graph) {
+      releaseGraphStorage(_inverse_device_graph);
+    } else {
+      _inverse_device_graph = {};
     }
   }
 
@@ -283,10 +255,9 @@ public:
       vertex_t low = 0;
       vertex_t high = _csr.getRowOffsetsSize() - 1;
       while (low <= high) {
-        vertex_t mid = low + (high - low) / 2;
-        if (_csr.getRowOffsets()[mid] <= edge && edge < _csr.getRowOffsets()[mid + 1]) {
-          return mid;
-        } else if (_csr.getRowOffsets()[mid] > edge) {
+        vertex_t mid = low + ((high - low) / 2);
+        if (_csr.getRowOffsets()[mid] <= edge && edge < _csr.getRowOffsets()[mid + 1]) { return mid; }
+        if (_csr.getRowOffsets()[mid] > edge) {
           high = mid - 1;
         } else {
           low = mid + 1;
@@ -420,10 +391,51 @@ public:
   sycl::queue& getQueue() const { return _queue; }
 
 private:
+  void initializeGraphStorage(const formats::CSR<ValueT, IndexT, OffsetT>& csr, const Properties& properties) {
+    IndexT n_rows = csr.getRowOffsetsSize();
+    OffsetT n_nonzeros = csr.getNumNonzeros();
+    IndexT* row_offsets = memory::detail::memoryAlloc<IndexT, Space>(n_rows + 1, _queue);
+    OffsetT* column_indices = memory::detail::memoryAlloc<OffsetT, Space>(n_nonzeros, _queue);
+    ValueT* nnz_values = memory::detail::memoryAlloc<ValueT, Space>(n_nonzeros, _queue);
+
+    auto e1 = _queue.copy(csr.getRowOffsets().data(), row_offsets, n_rows + 1);
+    auto e2 = _queue.copy(csr.getColumnIndices().data(), column_indices, n_nonzeros);
+    auto e3 = _queue.copy(csr.getValues().data(), nnz_values, n_nonzeros);
+    e1.wait();
+    e2.wait();
+    e3.wait();
+
+    this->_device_graph = {n_rows, n_nonzeros, column_indices, row_offsets, nnz_values};
+
+    if (properties.directed) {
+      formats::CSR<ValueT, IndexT, OffsetT> inverted_csr = csr.invert();
+
+      IndexT* inv_row_offsets = memory::detail::memoryAlloc<IndexT, Space>(n_rows + 1, _queue);
+      OffsetT* inv_column_indices = memory::detail::memoryAlloc<OffsetT, Space>(n_nonzeros, _queue);
+      ValueT* inv_nnz_values = memory::detail::memoryAlloc<ValueT, Space>(n_nonzeros, _queue);
+      auto e4 = _queue.copy(inverted_csr.getRowOffsets().data(), inv_row_offsets, n_rows + 1);
+      auto e5 = _queue.copy(inverted_csr.getColumnIndices().data(), inv_column_indices, n_nonzeros);
+      auto e6 = _queue.copy(inverted_csr.getValues().data(), inv_nnz_values, n_nonzeros);
+      e4.wait();
+      e5.wait();
+      e6.wait();
+      this->_inverse_device_graph = {n_rows, n_nonzeros, inv_column_indices, inv_row_offsets, inv_nnz_values};
+    } else {
+      this->_inverse_device_graph = this->_device_graph;
+    }
+  }
+
+  void releaseGraphStorage(GraphCSRDevice<IndexT, OffsetT, ValueT>& graph) {
+    memory::detail::releaseUSM(graph._row_offsets, _queue);
+    memory::detail::releaseUSM(graph._column_indices, _queue);
+    memory::detail::releaseUSM(graph._nnz_values, _queue);
+  }
+
   sycl::queue& _queue; ///< The SYCL queue associated with the graph.
-  const formats::CSR<ValueT, IndexT, OffsetT>& _csr;
-  GraphCSRDevice<IndexT, OffsetT, ValueT> _device_graph;
-  GraphCSRDevice<IndexT, OffsetT, ValueT> _inverse_device_graph;
+  formats::CSR<ValueT, IndexT, OffsetT> _csr;
+  GraphCSRDevice<IndexT, OffsetT, ValueT> _device_graph{};
+  GraphCSRDevice<IndexT, OffsetT, ValueT> _inverse_device_graph{};
+  bool _owns_inverse_graph = false;
 };
 } // namespace detail
 } // namespace graph

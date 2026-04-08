@@ -29,9 +29,15 @@ namespace build {
  * @return A graph constructed from the given CSR format.
  */
 template<memory::space Space, typename IndexT, typename OffsetT, typename ValueT>
-auto fromCSR(sycl::queue& q, sygraph::formats::CSR<ValueT, IndexT, OffsetT> csr, graph::Properties properties = graph::Properties()) {
+auto fromCSR(sycl::queue& q, const sygraph::formats::CSR<ValueT, IndexT, OffsetT>& csr, graph::Properties properties = graph::Properties()) {
   using GraphT = detail::GraphCSR<Space, IndexT, OffsetT, ValueT>;
   return GraphT{q, csr, properties};
+};
+
+template<memory::space Space, typename IndexT, typename OffsetT, typename ValueT>
+auto fromCSR(sycl::queue& q, sygraph::formats::CSR<ValueT, IndexT, OffsetT>&& csr, graph::Properties properties = graph::Properties()) {
+  using GraphT = detail::GraphCSR<Space, IndexT, OffsetT, ValueT>;
+  return GraphT{q, std::move(csr), properties};
 };
 
 } // namespace build

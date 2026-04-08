@@ -47,22 +47,22 @@ struct BCInstance {
     bc_values = sygraph::memory::detail::memoryAlloc<weight_t, memory::space::device>(size, queue);
 
     queue.fill(labels, static_cast<vertex_t>(this->invalid), size);
-    queue.memset(deltas, 0, size);
-    queue.memset(sigmas, 0, size);
-    queue.memset(bc_values, 0, size);
+    queue.fill(deltas, static_cast<weight_t>(0), size);
+    queue.fill(sigmas, static_cast<weight_t>(0), size);
+    queue.fill(bc_values, static_cast<weight_t>(0), size);
     queue.wait_and_throw();
 
-    queue.memset(&sigmas[source], static_cast<weight_t>(1), 1);
+    queue.fill(&sigmas[source], static_cast<weight_t>(1), 1);
     labels[source] = 0;
     queue.wait_and_throw();
   }
 
   ~BCInstance() {
     sycl::queue& queue = G.getQueue();
-    sycl::free(labels, queue);
-    sycl::free(deltas, queue);
-    sycl::free(sigmas, queue);
-    sycl::free(bc_values, queue);
+    memory::detail::releaseUSM(labels, queue);
+    memory::detail::releaseUSM(deltas, queue);
+    memory::detail::releaseUSM(sigmas, queue);
+    memory::detail::releaseUSM(bc_values, queue);
   }
 };
 } // namespace detail

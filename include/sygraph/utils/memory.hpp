@@ -30,6 +30,14 @@ inline T* memoryAlloc(size_t n, sycl::queue& q) {
   throw std::runtime_error("Unknown memory space");
 }
 
+template<typename T>
+inline void releaseUSM(T*& ptr, sycl::queue& q) {
+  if (ptr == nullptr) { return; }
+
+  sycl::free(ptr, q);
+  ptr = nullptr;
+}
+
 } // namespace detail
 } // namespace memory
 } // namespace sygraph

@@ -70,9 +70,9 @@ struct SSSPInstance {
 
   ~SSSPInstance() {
     sycl::queue& queue = G.getQueue();
-    sycl::free(distances, queue);
-    sycl::free(parents, queue);
-    sycl::free(visited, queue);
+    memory::detail::releaseUSM(distances, queue);
+    memory::detail::releaseUSM(parents, queue);
+    memory::detail::releaseUSM(visited, queue);
   }
 };
 } // namespace detail

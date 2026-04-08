@@ -92,14 +92,8 @@ struct BFSInstance {
    * @brief Destroys the BFSInstance object and frees the allocated memory.
    */
   ~BFSInstance() {
-    if (distances != nullptr) {
-      sycl::free(distances, G.getQueue());
-      distances = nullptr;
-    }
-    if (parents != nullptr) {
-      sycl::free(parents, G.getQueue());
-      parents = nullptr;
-    }
+    memory::detail::releaseUSM(distances, G.getQueue());
+    memory::detail::releaseUSM(parents, G.getQueue());
   }
 };
 } // namespace detail

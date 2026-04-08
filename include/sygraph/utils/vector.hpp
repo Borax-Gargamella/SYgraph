@@ -16,9 +16,19 @@ namespace sygraph {
 template<typename T>
 class Vector {
 public:
-  Vector(sycl::queue& q, size_t size) : _q(q), _size{size} { _data = sycl::malloc_shared<T>(size, q); }
+  Vector(sycl::queue& q, size_t size) : _q(q), _data(sycl::malloc_shared<T>(size, q)), _size(size) {}
 
-  ~Vector() { sycl::free(_data, _q); }
+  Vector(const Vector&) = delete;
+  Vector& operator=(const Vector&) = delete;
+
+  Vector(Vector&& other) noexcept : _q(other._q), _data(other._data), _size(other._size) {
+    other._data = nullptr;
+    other._size = 0;
+  }
+
+  Vector& operator=(Vector&&) = delete;
+
+  ~Vector() { memory::detail::releaseUSM(_data, _q); }
 
   T* getData() const { return _data; }
 

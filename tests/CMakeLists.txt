@@ -6,12 +6,16 @@ add_executable(coo2csr_weighted formats/coo2csr.cpp)
 add_executable(coo2csr_unweighted formats/coo2csr_unweighted.cpp)
 add_executable(format_properties formats/properties.cpp)
 add_executable(graph_build graph/graph.cpp)
+add_executable(graph_teardown graph/graph_teardown.cpp)
 add_executable(advance operators/advance.cpp)
 add_executable(advance_graph operators/advance_graph.cpp)
 
 get_directory_property(all_targets BUILDSYSTEM_TARGETS)
 
-set(CMAKE_CXX_FLAGS "${CMAXE_CXX_FLAGS} -fsycl -fsycl-targets=${ARCH}")
+set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -fsycl")
+if (DEFINED ARCH AND NOT ARCH STREQUAL "")
+  set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -fsycl-targets=${ARCH}")
+endif()
 
 enable_testing()
 
@@ -48,6 +52,12 @@ add_test(
 add_test(
   NAME graph_build
   COMMAND coo2csr_unweighted
+  WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
+)
+
+add_test(
+  NAME graph_teardown
+  COMMAND graph_teardown
   WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
 )
 

@@ -200,21 +200,34 @@ public:
     bitmap_type* ptr = sygraph::memory::detail::memoryAlloc<bitmap_type, memory::space::shared>(_bitmap.getBitmapSize(), _queue);
     int* offsets = sygraph::memory::detail::memoryAlloc<int, memory::space::device>(_bitmap.getBitmapSize(), _queue);
     uint32_t* offsets_size = sygraph::memory::detail::memoryAlloc<uint32_t, memory::space::shared>(1, _queue);
-    auto size = _bitmap.getBitmapSize();
-    _queue.memset(ptr, static_cast<bitmap_type>(0), size).wait();
-    _queue.fill(offsets_size, 0, size).wait();
+    _queue.fill(ptr, static_cast<bitmap_type>(0), _bitmap.getBitmapSize()).wait();
+    _queue.fill(offsets_size, static_cast<uint32_t>(0), 1).wait();
     _bitmap.setPtr(ptr, offsets, offsets_size);
   }
 
   using bitmap_type = typename BitmapDevice<T>::bitmap_type;
 
+  FrontierBitmap(const FrontierBitmap&) = delete;
+  FrontierBitmap& operator=(const FrontierBitmap&) = delete;
+
+  FrontierBitmap(FrontierBitmap&& other) noexcept : _queue(other._queue), _bitmap(other._bitmap) { other._bitmap.setPtr(nullptr, nullptr, nullptr); }
+
+  FrontierBitmap& operator=(FrontierBitmap&&) = delete;
+
   /**
    * @brief Destroys the frontier_bitmap_t object and frees the allocated memory.
    */
   ~FrontierBitmap() {
-    sycl::free(_bitmap.getData(), _queue);
-    sycl::free(_bitmap.getOffsets(), _queue);
-    sycl::free(_bitmap.getOffsetsSize(), _queue);
+    auto* data = _bitmap.getData();
+    memory::detail::releaseUSM(data, _queue);
+
+    auto* offsets = _bitmap.getOffsets();
+    memory::detail::releaseUSM(offsets, _queue);
+
+    auto* offsets_size = _bitmap.getOffsetsSize();
+    memory::detail::releaseUSM(offsets_size, _queue);
+
+    _bitmap.setPtr(data, offsets, offsets_size);
   }
 
   size_t getBitmapSize() const { return _bitmap._size; }
@@ -335,13 +348,6 @@ public:
         })
         .wait();
     return true;
-  }
-
-  // operator =
-  FrontierBitmap& operator=(const FrontierBitmap& other) {
-    if (this == &other) { return *this; }
-    _queue.copy(other._bitmap.data, this->_bitmap.data, _bitmap.size).wait();
-    return *this;
   }
 
   /**

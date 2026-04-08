@@ -58,7 +58,7 @@ struct CCInstance {
   /**
    * @brief Destroys the CCInstance object and frees the allocated memory.
    */
-  ~CCInstance() { sycl::free(labels, G.getQueue()); }
+  ~CCInstance() { memory::detail::releaseUSM(labels, G.getQueue()); }
 };
 } // namespace detail
 

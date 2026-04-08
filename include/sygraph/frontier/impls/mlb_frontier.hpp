@@ -132,7 +132,9 @@ public:
     return _data[level][idx / _range] & (static_cast<bitmap_type>(1) << (idx % _range));
   }
 
-  void setData(bitmap_type* data[Levels]) { for (uint16_t i = 0; i < Levels; i++) { this->_data[i] = data[i]; } }
+  void setData(bitmap_type* data[Levels]) {
+    for (uint16_t i = 0; i < Levels; i++) { this->_data[i] = data[i]; }
+  }
 
   void setData(const uint level, bitmap_type* data) { this->_data[level] = data; }
 
@@ -176,22 +178,31 @@ public:
     _bitmap.setOffsetsSize(offsets_size);
   }
 
+  FrontierMLB(const FrontierMLB&) = delete;
+  FrontierMLB& operator=(const FrontierMLB&) = delete;
+
+  FrontierMLB(FrontierMLB&& other) noexcept : _queue(other._queue), _bitmap(other._bitmap) {
+    other._bitmap = DeviceFrontier(other._bitmap.getNumElems());
+    for (size_t i = 0; i < Levels; i++) { other._bitmap.setData(i, nullptr); }
+    other._bitmap.setOffsets(nullptr);
+    other._bitmap.setOffsetsSize(nullptr);
+  }
+
+  FrontierMLB& operator=(FrontierMLB&&) = delete;
+
   ~FrontierMLB() {
-    for (size_t i = 0; i < Levels; i++) { 
-      if (_bitmap.getData(i) != nullptr) {
-        sycl::free(_bitmap.getData(i), _queue); 
-        _bitmap.setData(i, nullptr);
-      }
+    for (size_t i = 0; i < Levels; i++) {
+      auto* data = _bitmap.getData(i);
+      memory::detail::releaseUSM(data, _queue);
+      _bitmap.setData(i, data);
     }
-    if (_bitmap.getOffsets() != nullptr) {
-      sycl::free(_bitmap.getOffsets(), _queue);
-      _bitmap.setOffsets(nullptr);
-    }
-    
-    if (_bitmap.getOffsetsSize() != nullptr) {
-      sycl::free(_bitmap.getOffsetsSize(), _queue);
-      _bitmap.setOffsetsSize(nullptr);
-    }
+    auto* offsets = _bitmap.getOffsets();
+    memory::detail::releaseUSM(offsets, _queue);
+    _bitmap.setOffsets(offsets);
+
+    auto* offsets_size = _bitmap.getOffsetsSize();
+    memory::detail::releaseUSM(offsets_size, _queue);
+    _bitmap.setOffsetsSize(offsets_size);
   }
 
   size_t getBitmapSize() const { return _bitmap.getBitmapSize(); }
@@ -297,17 +308,6 @@ public:
 #endif
     sycl::host_accessor<size_t, 1> size_acc(size_buf);
     return size_acc[0];
-  }
-
-  // operator =
-  FrontierMLB& operator=(const FrontierMLB& other) {
-    if (this == &other) { return *this; }
-    auto e = _queue.copy(other._bitmap.getData(), this->_bitmap.getData(), _bitmap.getBitmapSize());
-    e.wait();
-#ifdef ENABLE_PROFILING
-    sygraph::Profiler::addEvent(e, "copyFrontier");
-#endif
-    return *this;
   }
 
   void merge(FrontierMLB<T>& other) {
