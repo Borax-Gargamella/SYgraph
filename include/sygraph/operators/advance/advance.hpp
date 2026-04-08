@@ -10,6 +10,7 @@
 #include <sygraph/frontier/frontier.hpp>
 #include <sygraph/frontier/frontier_settings.hpp>
 #include <sygraph/graph/graph.hpp>
+#include <sygraph/operators/advance/bucketing.hpp>
 #include <sygraph/operators/advance/workgroup_mapped.hpp>
 #include <sygraph/operators/advance/workitem_mapped.hpp>
 #include <sygraph/operators/config.hpp>
@@ -54,7 +55,10 @@ sygraph::Event vertices(GraphT& graph, sygraph::frontier::Frontier<T, FrontierTy
     return sygraph::operators::advance::detail::workgroup_mapped::
         launchBitmapKernel<sygraph::frontier::frontier_view::graph, FW, sygraph::operators::direction::push, T>(
             graph, in, out, std::forward<LambdaT>(functor), sygraph::frontier::size::fetch_from_memory);
-    // return sygraph::operators::advance::detail::workgroup_mapped::vertices<FW>(graph, out, std::forward<LambdaT>(functor));
+  } else if constexpr (Lb == sygraph::operators::load_balancer::bucketing) {
+    return sygraph::operators::advance::detail::bucketing::
+        launchBitmapKernel<sygraph::frontier::frontier_view::graph, FW, sygraph::operators::direction::push, T>(
+            graph, in, out, std::forward<LambdaT>(functor), sygraph::frontier::size::fetch_from_memory);
   } else {
     throw std::runtime_error("Load balancer not implemented");
   }
@@ -127,6 +131,9 @@ sygraph::Event frontier(GraphT& graph,
   } else if constexpr (Lb == sygraph::operators::load_balancer::workgroup_mapped) {
     return sygraph::operators::advance::detail::workgroup_mapped::launchBitmapKernel<InView, OutView, Direction, T>(
         graph, in, out, std::forward<LambdaT>(functor), expected_size);
+  } else if constexpr (Lb == sygraph::operators::load_balancer::bucketing) {
+    return sygraph::operators::advance::detail::bucketing::launchBitmapKernel<InView, OutView, Direction, T>(
+        graph, in, out, std::forward<LambdaT>(functor), expected_size);
   } else {
     throw std::runtime_error("Load balancer not implemented");
   }
@@ -148,6 +155,9 @@ sygraph::Event frontier(GraphT& graph,
     return sygraph::operators::advance::detail::workitem_mapped::frontier<InView, OutView>(graph, in, out, std::forward<LambdaT>(functor));
   } else if constexpr (Lb == sygraph::operators::load_balancer::workgroup_mapped) {
     return sygraph::operators::advance::detail::workgroup_mapped::launchBitmapKernel<InView, OutView, sygraph::operators::direction::push, T>(
+        graph, in, out, std::forward<LambdaT>(functor), expected_size);
+  } else if constexpr (Lb == sygraph::operators::load_balancer::bucketing) {
+    return sygraph::operators::advance::detail::bucketing::launchBitmapKernel<InView, OutView, sygraph::operators::direction::push, T>(
         graph, in, out, std::forward<LambdaT>(functor), expected_size);
   } else {
     throw std::runtime_error("Load balancer not implemented");

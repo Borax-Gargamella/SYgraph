@@ -11,6 +11,7 @@ enum class load_balancer {
   workitem_mapped,
   subgroup_mapped,
   workgroup_mapped,
+  bucketing,
 };
 
 enum class direction {

@@ -21,15 +21,30 @@ namespace advance {
 
 namespace detail {
 
+template<typename T>
+SYCL_EXTERNAL inline uint32_t workgroupMappedUpperBound(const T* values, uint32_t n, T value) {
+  uint32_t left = 0;
+  uint32_t right = n;
+  while (left < right) {
+    const uint32_t mid = left + ((right - left) >> 1);
+    if (values[mid] <= value) {
+      left = mid + 1;
+    } else {
+      right = mid;
+    }
+  }
+  return left;
+}
 
 template<typename...>
 inline constexpr bool dependent_false_v = false;
+
 
 template<sygraph::operators::direction Direction, sygraph::frontier::frontier_view IFW, sygraph::frontier::frontier_view OFW>
 class workgroup_mapped_advance_kernel; // needed only for naming purposes
 
 // Per-workgroup bookkeeping shared across helper methods.
-struct ContextState {
+struct WorkgroupMappedContextState {
   size_t group_offset;
   const uint16_t coarsening_factor;
   const uint32_t offsets_size;
@@ -42,49 +57,63 @@ template<sygraph::frontier::frontier_view IFW,
          typename InFrontierDevT,
          typename OutFrontierDevT>
 // Wraps the device frontiers and exposes helpers used inside the advance kernel.
-struct Context {
+struct WorkgroupMappedContext {
   // Available vertex/edge count and frontier views used by the kernel.
   size_t limit;
   InFrontierDevT in_dev_frontier;
   OutFrontierDevT out_dev_frontier;
 
   // Build the execution context once per kernel launch.
-  Context(size_t limit, InFrontierDevT in_dev_frontier, OutFrontierDevT out_dev_frontier)
+  WorkgroupMappedContext(size_t limit, InFrontierDevT in_dev_frontier, OutFrontierDevT out_dev_frontier)
       : limit(limit), in_dev_frontier(in_dev_frontier), out_dev_frontier(out_dev_frontier) {}
 
   // Initialize a ContextState for the calling work-group.
-  SYCL_EXTERNAL inline ContextState init(sycl::nd_item<1>& item) const {
-    return {
-        item.get_group_linear_id(),
-        static_cast<uint16_t>(item.get_local_range(0) / in_dev_frontier.getBitmapRange()),
-        in_dev_frontier.getOffsetsSize()[0],
-        item,
-    };
+  SYCL_EXTERNAL inline WorkgroupMappedContextState init(sycl::nd_item<1>& item) const {
+    if constexpr (IFW == sygraph::frontier::frontier_view::vertex) {
+      return {
+          item.get_group_linear_id(),
+          static_cast<uint16_t>(item.get_local_range(0) / in_dev_frontier.getBitmapRange()),
+          in_dev_frontier.getOffsetsSize()[0],
+          item,
+      };
+    } else if constexpr (IFW == sygraph::frontier::frontier_view::graph) {
+      return {
+          item.get_group_linear_id(),
+          static_cast<uint16_t>(item.get_local_range(0)),
+          static_cast<uint32_t>(limit),
+          item,
+      };
+    } else {
+      return {0, 0, 0, item};
+    }
   }
 
   // Determine whether the current work-group still owns unprocessed segments.
-  SYCL_EXTERNAL inline bool needToProcess(ContextState& state) const { return (state.group_offset * state.coarsening_factor < state.offsets_size); }
+  SYCL_EXTERNAL inline bool needToProcess(WorkgroupMappedContextState& state) const {
+    return (state.group_offset * state.coarsening_factor < state.offsets_size);
+  }
 
   // Advance the state to the next chunk of bitmap offsets.
-  SYCL_EXTERNAL inline void completeIteration(ContextState& state) const { state.group_offset += state.item.get_group_range(0); }
+  SYCL_EXTERNAL inline void completeIteration(WorkgroupMappedContextState& state) const { state.group_offset += state.item.get_group_range(0); }
 
   // Compute which vertex/edge matches the current lane.
-  SYCL_EXTERNAL inline size_t getAssignedElement(const ContextState& state) const {
+  SYCL_EXTERNAL inline size_t getAssignedElement(const WorkgroupMappedContextState& state) const {
     if constexpr (IFW == sygraph::frontier::frontier_view::vertex) {
       const uint16_t bitmap_range = in_dev_frontier.getBitmapRange();
       const uint32_t actual_id_offset = (state.group_offset * state.coarsening_factor) + (state.item.get_local_linear_id() / bitmap_range);
+      if (actual_id_offset >= state.offsets_size) { return limit; }
       const int* bitmap_offsets = in_dev_frontier.getOffsets();
       const auto assigned_vertex = (bitmap_offsets[actual_id_offset] * bitmap_range) + (state.item.get_local_linear_id() % bitmap_range);
       return assigned_vertex;
     } else if constexpr (IFW == sygraph::frontier::frontier_view::graph) {
-      return state.item.get_global_linear_id();
+      return (state.group_offset * state.coarsening_factor) + state.item.get_local_linear_id();
     } else {
-      return -1;
+      return limit;
     }
   }
 
   // Check whether the vertex is inside the active frontier / graph.
-  SYCL_EXTERNAL inline bool check(const ContextState& state, const uint32_t& vertex) const {
+  SYCL_EXTERNAL inline bool check(const WorkgroupMappedContextState& state, const uint32_t& vertex) const {
     if constexpr (IFW == sygraph::frontier::frontier_view::vertex) {
       return vertex < limit && ((Direction == sygraph::operators::direction::push) == in_dev_frontier.check(vertex));
     } else if constexpr (IFW == sygraph::frontier::frontier_view::graph) {
@@ -95,7 +124,7 @@ struct Context {
   }
 
   // Predicate used to skip invalid neighbors (only meaningful in pull mode).
-  SYCL_EXTERNAL inline bool isValidNeighbor(const ContextState& state, const uint32_t& neighbor) const {
+  SYCL_EXTERNAL inline bool isValidNeighbor(const WorkgroupMappedContextState& state, const uint32_t& neighbor) const {
     if constexpr (Direction == sygraph::operators::direction::pull) {
       return in_dev_frontier.check(neighbor);
     } else {
@@ -104,7 +133,7 @@ struct Context {
   }
 
   // Add the produced vertex/neighbor to the destination frontier depending on direction.
-  SYCL_EXTERNAL inline void insert(const ContextState& state, const uint32_t& vertex, const uint32_t& neighbor) const {
+  SYCL_EXTERNAL inline void insert(const WorkgroupMappedContextState& state, const uint32_t& vertex, const uint32_t& neighbor) const {
     if constexpr (OFW == sygraph::frontier::frontier_view::vertex) {
       if constexpr (Direction == sygraph::operators::direction::push)
         out_dev_frontier.insert(neighbor);
@@ -122,117 +151,59 @@ template<sygraph::frontier::frontier_view InFW,
          graph::detail::DeviceGraphConcept GraphDevT,
          typename LambdaT>
 // Work-distribution kernel that maps bitmap entries to the most suitable execution granularity.
-struct BitmapKernel {
+struct WorkgroupMappedBitmapKernel {
   // Entry point invoked by the SYCL runtime for each work-item.
   void operator()(sycl::nd_item<1> item) const {
+    static_assert(InFW != sygraph::frontier::frontier_view::none, "Workgroup-mapped advance requires an input frontier.");
+
     const size_t lid = item.get_local_linear_id();
     const auto wgroup = item.get_group();
     const size_t wgroup_size = wgroup.get_local_range(0);
-    const auto sgroup = item.get_sub_group();
-    const auto sgroup_id = sgroup.get_group_id();
-    const size_t sgroup_size = sgroup.get_local_range()[0];
-    const size_t llid = sgroup.get_local_linear_id();
 
     auto state = context.init(item);
 
-    sycl::atomic_ref<uint32_t, sycl::memory_order::relaxed, sycl::memory_scope::sub_group> sg_tail{subgroup_reduce_tail[sgroup_id]};
-    sycl::atomic_ref<uint32_t, sycl::memory_order::relaxed, sycl::memory_scope::work_group> wg_tail{workgroup_reduce_tail[0]};
-
     while (context.needToProcess(state)) {
-      const auto assigned_vertex = context.getAssignedElement(state);
+      const uint32_t assigned_vertex = static_cast<uint32_t>(context.getAssignedElement(state));
+      const bool vertex_active = context.check(state, assigned_vertex);
+      const uint32_t degree = vertex_active ? static_cast<uint32_t>(graph_dev.getDegree(assigned_vertex)) : 0U;
 
-      // Reset local reductions so the group can classify work for this iteration.
-      if (sgroup.leader()) { subgroup_reduce_tail[sgroup_id] = 0; }
-      if (wgroup.leader()) { workgroup_reduce_tail[0] = 0; }
+      vertices[lid] = vertex_active ? assigned_vertex : UINT32_MAX;
+      start_edges[lid] = vertex_active ? static_cast<uint32_t>(graph_dev.getFirstNeighbor(assigned_vertex)) : 0U;
 
+      const uint32_t exclusive_begin = sycl::exclusive_scan_over_group(wgroup, degree, sycl::plus<uint32_t>());
+      const uint32_t total_edges = sycl::reduce_over_group(wgroup, degree, sycl::plus<uint32_t>());
 
-      const uint32_t offset = sgroup_id * sgroup_size;
-      if (context.check(state, assigned_vertex)) {
-        const uint32_t n_edges = graph_dev.getDegree(assigned_vertex);
-        if (n_edges >= wgroup_size * wgroup_size) { // dispatch to the whole workgroup
-          const uint32_t loc = wg_tail.fetch_add(1U);
-          n_edges_wg[loc] = n_edges;
-          workgroup_reduce[loc] = assigned_vertex;
-          workgroup_ids[loc] = lid;
-        } else if (n_edges >= sgroup_size) { // dispatch to a subgroup
-          const uint32_t loc = sg_tail.fetch_add(1U);
-          n_edges_sg[offset + loc] = n_edges;
-          subgroup_reduce[offset + loc] = assigned_vertex;
-          subgroup_ids[offset + loc] = lid;
-        }
-        visited[lid] = false;
-      } else {
-        visited[lid] = true;
-      }
-
-      // Process vertices assigned to the workgroup.
+      scan_begins[lid] = exclusive_begin;
+      scan_ends[lid] = exclusive_begin + degree;
       sycl::group_barrier(wgroup);
-      const auto wg_assigned = wg_tail.load();
-      for (size_t i = 0; i < wg_assigned; i++) {
-        const auto vertex = workgroup_reduce[i];
-        const size_t n_edges = n_edges_wg[i];
-        auto start = graph_dev.begin(vertex);
 
-        for (auto j = lid; j < n_edges; j += wgroup_size) {
-          auto n = start + j;
-          const auto edge = n.getIndex();
-          const auto weight = graph_dev.getEdgeWeight(edge);
-          const auto neighbor = *n;
-          if (context.isValidNeighbor(state, neighbor) && functor(vertex, neighbor, edge, weight)) { context.insert(state, vertex, neighbor); }
-        }
+      for (uint32_t edge_rank = static_cast<uint32_t>(lid); edge_rank < total_edges; edge_rank += static_cast<uint32_t>(wgroup_size)) {
+        const uint32_t slot = workgroupMappedUpperBound(&scan_ends[0], static_cast<uint32_t>(wgroup_size), edge_rank);
+        if (slot >= wgroup_size) { continue; }
 
-        if (wgroup.leader()) { visited[workgroup_ids[i]] = true; }
+        const uint32_t source = vertices[slot];
+        if (source == UINT32_MAX) { continue; }
+
+        const uint32_t local_edge_offset = edge_rank - scan_begins[slot];
+        const uint32_t edge = start_edges[slot] + local_edge_offset;
+        if (edge >= graph_dev.getEdgeCount()) { continue; }
+
+        const auto weight = graph_dev.getEdgeWeight(edge);
+        const auto neighbor = graph_dev.getDestinationVertex(edge);
+        if (context.isValidNeighbor(state, neighbor) && functor(source, neighbor, edge, weight)) { context.insert(state, source, neighbor); }
       }
 
-      // Process vertices assigned to subgroups.
-      sycl::group_barrier(sgroup);
-      const auto sg_assigned = sg_tail.load();
-      for (size_t i = 0; i < sg_assigned; i++) {
-        const size_t vertex_id = offset + i;
-        const auto vertex = subgroup_reduce[vertex_id];
-        const size_t n_edges = n_edges_sg[vertex_id];
-        auto start = graph_dev.begin(vertex);
-
-        for (auto j = llid; j < n_edges; j += sgroup_size) {
-          auto n = start + j;
-          const auto edge = n.getIndex();
-          const auto weight = graph_dev.getEdgeWeight(edge);
-          const auto neighbor = *n;
-          if (context.isValidNeighbor(state, neighbor) && functor(vertex, neighbor, edge, weight)) { context.insert(state, vertex, neighbor); }
-        }
-
-        if (sgroup.leader()) { visited[subgroup_ids[vertex_id]] = true; }
-      }
-      sycl::group_barrier(sgroup);
-
-      // Fallback: each lane processes its own very small vertex.
-      if (!visited[lid]) {
-        const auto vertex = assigned_vertex;
-        auto start = graph_dev.begin(vertex);
-        const auto end = graph_dev.end(vertex);
-
-        for (auto n = start; n != end; ++n) {
-          const auto edge = n.getIndex();
-          const auto weight = graph_dev.getEdgeWeight(edge);
-          const auto neighbor = *n;
-          if (context.isValidNeighbor(state, neighbor) && functor(vertex, neighbor, edge, weight)) { context.insert(state, vertex, neighbor); }
-        }
-      }
+      sycl::group_barrier(wgroup);
       context.completeIteration(state);
     }
   }
 
   const ContextT context;
   const GraphDevT graph_dev;
-  const sycl::local_accessor<uint32_t, 1> n_edges_wg;
-  const sycl::local_accessor<uint32_t, 1> n_edges_sg;
-  const sycl::local_accessor<bool, 1> visited;
-  const sycl::local_accessor<T, 1> subgroup_reduce;
-  const sycl::local_accessor<uint32_t, 1> subgroup_reduce_tail;
-  const sycl::local_accessor<uint32_t, 1> subgroup_ids;
-  const sycl::local_accessor<T, 1> workgroup_reduce;
-  const sycl::local_accessor<uint32_t, 1> workgroup_reduce_tail;
-  const sycl::local_accessor<uint32_t, 1> workgroup_ids;
+  const sycl::local_accessor<uint32_t, 1> vertices;
+  const sycl::local_accessor<uint32_t, 1> start_edges;
+  const sycl::local_accessor<uint32_t, 1> scan_begins;
+  const sycl::local_accessor<uint32_t, 1> scan_ends;
   const LambdaT functor;
 };
 
@@ -240,7 +211,8 @@ struct BitmapKernel {
 // the heuristics that balance occupancy and available compute.
 template<sygraph::frontier::frontier_view InFW, typename GraphT, typename InFrontierT>
 inline sygraph::detail::kernel::LaunchConfig
-buildLaunchConfig(GraphT& graph, const InFrontierT& in, bool pull_advance, int expected_size, size_t coarsening_factor, sycl::queue& q) {
+buildWorkgroupMappedLaunchConfig(GraphT& graph, const InFrontierT& in, bool pull_advance, int expected_size, size_t coarsening_factor,
+                                 sycl::queue& q) {
   sygraph::detail::kernel::LaunchConfig config{};
   auto in_dev_frontier = in.getDeviceFrontier();
   if constexpr (InFW == sygraph::frontier::frontier_view::vertex) {
@@ -305,42 +277,29 @@ sygraph::Event launchBitmapKernel(GraphT& graph, const InFrontierT& in, const Ou
   const size_t coarsening_factor = types::detail::COMPUTE_UNIT_SIZE / sygraph::detail::device::getSubgroupSize(q);
   const bool pull_advance = (Direction == sygraph::operators::direction::pull);
 
-  const auto launch_cfg = buildLaunchConfig<InFW>(graph, in, pull_advance, expected_size, coarsening_factor, q);
+  const auto launch_cfg = buildWorkgroupMappedLaunchConfig<InFW>(graph, in, pull_advance, expected_size, coarsening_factor, q);
   const sycl::range<1>& local_range = launch_cfg.local;
   const sycl::range<1>& global_range = launch_cfg.global;
   const sycl::event& dependency = launch_cfg.dependency;
 
-  Context<InFW, OutFW, Direction, decltype(in_dev_frontier), decltype(out_dev_frontier)> context{num_nodes, in_dev_frontier, out_dev_frontier};
-  using bitmap_kernel_t = BitmapKernel<InFW, OutFW, element_t, decltype(context), decltype(graph_dev), LambdaT>;
-
-  const uint32_t max_num_subgroups = sygraph::detail::device::getMaxNumSubgroups(q);
+  WorkgroupMappedContext<InFW, OutFW, Direction, decltype(in_dev_frontier), decltype(out_dev_frontier)> context{
+      num_nodes, in_dev_frontier, out_dev_frontier};
+  using bitmap_kernel_t = WorkgroupMappedBitmapKernel<InFW, OutFW, element_t, decltype(context), decltype(graph_dev), LambdaT>;
 
   auto e = q.submit([&](sycl::handler& cgh) {
     cgh.depends_on(dependency);
-    // Local storage used to distribute vertices across workgroups/subgroups.
-    sycl::local_accessor<uint32_t, 1> n_edges_wg{local_range, cgh};
-    sycl::local_accessor<uint32_t, 1> n_edges_sg{local_range, cgh};
-    sycl::local_accessor<bool, 1> visited{local_range, cgh};
-    sycl::local_accessor<element_t, 1> subgroup_reduce{local_range, cgh};
-    sycl::local_accessor<uint32_t, 1> subgroup_reduce_tail{max_num_subgroups, cgh};
-    sycl::local_accessor<uint32_t, 1> subgroup_ids{local_range, cgh};
-    sycl::local_accessor<element_t, 1> workgroup_reduce{local_range, cgh};
-    sycl::local_accessor<uint32_t, 1> workgroup_reduce_tail{1, cgh};
-    sycl::local_accessor<uint32_t, 1> workgroup_ids{local_range, cgh};
-
+    sycl::local_accessor<uint32_t, 1> vertices{local_range, cgh};
+    sycl::local_accessor<uint32_t, 1> start_edges{local_range, cgh};
+    sycl::local_accessor<uint32_t, 1> scan_begins{local_range, cgh};
+    sycl::local_accessor<uint32_t, 1> scan_ends{local_range, cgh};
 
     cgh.parallel_for<workgroup_mapped_advance_kernel<Direction, InFW, OutFW>>(sycl::nd_range<1>{global_range, local_range},
                                                                               bitmap_kernel_t{context,
                                                                                               graph_dev,
-                                                                                              n_edges_wg,
-                                                                                              n_edges_sg,
-                                                                                              visited,
-                                                                                              subgroup_reduce,
-                                                                                              subgroup_reduce_tail,
-                                                                                              subgroup_ids,
-                                                                                              workgroup_reduce,
-                                                                                              workgroup_reduce_tail,
-                                                                                              workgroup_ids,
+                                                                                              vertices,
+                                                                                              start_edges,
+                                                                                              scan_begins,
+                                                                                              scan_ends,
                                                                                               std::forward<LambdaT>(functor)});
   });
   return {e};
@@ -350,4 +309,4 @@ sygraph::Event launchBitmapKernel(GraphT& graph, const InFrontierT& in, const Ou
 } // namespace detail
 } // namespace advance
 } // namespace operators
-} // namespace sygraph
+}

@@ -132,9 +132,9 @@ public:
     return _data[level][idx / _range] & (static_cast<bitmap_type>(1) << (idx % _range));
   }
 
-  void setData(bitmap_type* data[Levels]) {
-    for (uint16_t i = 0; i < Levels; i++) { this->_data[i] = data[i]; }
-  }
+  void setData(bitmap_type* data[Levels]) { for (uint16_t i = 0; i < Levels; i++) { this->_data[i] = data[i]; } }
+
+  void setData(const uint level, bitmap_type* data) { this->_data[level] = data; }
 
   void setOffsets(int* offsets) { this->_offsets = offsets; }
 
@@ -177,9 +177,21 @@ public:
   }
 
   ~FrontierMLB() {
-    for (size_t i = 0; i < Levels; i++) { sycl::free(_bitmap.getData(i), _queue); }
-    sycl::free(_bitmap.getOffsets(), _queue);
-    sycl::free(_bitmap.getOffsetsSize(), _queue);
+    for (size_t i = 0; i < Levels; i++) { 
+      if (_bitmap.getData(i) != nullptr) {
+        sycl::free(_bitmap.getData(i), _queue); 
+        _bitmap.setData(i, nullptr);
+      }
+    }
+    if (_bitmap.getOffsets() != nullptr) {
+      sycl::free(_bitmap.getOffsets(), _queue);
+      _bitmap.setOffsets(nullptr);
+    }
+    
+    if (_bitmap.getOffsetsSize() != nullptr) {
+      sycl::free(_bitmap.getOffsetsSize(), _queue);
+      _bitmap.setOffsetsSize(nullptr);
+    }
   }
 
   size_t getBitmapSize() const { return _bitmap.getBitmapSize(); }
