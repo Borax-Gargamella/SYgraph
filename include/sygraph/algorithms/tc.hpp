@@ -4,6 +4,9 @@
  */
 #pragma once
 
+#include "sygraph/operators/advance/advance.hpp"
+#include "sygraph/operators/config.hpp"
+#include "sygraph/utils/memory.hpp"
 #include <sycl/sycl.hpp>
 
 #include <memory>
@@ -71,37 +74,38 @@ public:
     sycl::queue& queue = G.getQueue();
 
     size_t num_nodes = G.getVertexCount();
+    auto graph_dev = G.getDeviceGraph();
 
-    auto e = queue.submit([&](sycl::handler& cgh) {
-      auto g_dev = G.getDeviceGraph();
-      size_t edges = G.getEdgeCount();
+    constexpr auto lb = sygraph::operators::load_balancer::workgroup_mapped;
+    auto e = sygraph::operators::advance::vertices<lb>(G, [=](auto u, auto v, auto e, auto w) {
+      (void)e;
+      (void)w;
 
-      cgh.parallel_for({edges}, [=](sycl::id<1> idx) {
-        edge_t edge = idx[0];
+      if (u >= v) { return false; }
 
-        vertex_t src = g_dev.getSourceVertex(edge);
-        vertex_t dst = g_dev.getDestinationVertex(edge);
+      auto src_it = graph_dev.begin(u);
+      auto src_end = graph_dev.end(u);
+      auto dst_it = graph_dev.begin(v);
+      auto dst_end = graph_dev.end(v);
 
-        auto src_it = g_dev.begin(src);
-        auto src_end = g_dev.end(src);
-        auto dst_it = g_dev.begin(dst);
-        auto dst_end = g_dev.end(dst);
-        uint32_t src_degree = g_dev.getDegree(src);
-        uint32_t dst_degree = g_dev.getDegree(dst);
+      int local_triangles = 0;
 
-        while (src_it != src_end && dst_it != dst_end) {
-          if (*src_it < *dst_it) {
-            ++src_it;
-          } else if (*src_it > *dst_it) {
-            ++dst_it;
-          } else { // triangle found
-            sygraph::sync::atomicFetchAdd<uint32_t>(triangles + src, 1);
-            ++src_it;
-            ++dst_it;
-          }
+      while (src_it != src_end && dst_it != dst_end) {
+        if (*src_it == *dst_it) {
+          ++local_triangles;
+          ++src_it;
+          ++dst_it;
+        } else if (*src_it < *dst_it) {
+          ++src_it;
+        } else {
+          ++dst_it;
         }
-      });
+
+        if (local_triangles > 0) { sygraph::sync::atomicFetchAdd<uint32_t>(triangles + u, local_triangles); }
+      }
+      return false;
     });
+
     e.wait();
 #ifdef ENABLE_PROFILING
     sygraph::Profiler::addEvent(e, "TC");

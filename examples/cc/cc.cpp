@@ -64,7 +64,7 @@ int main(int argc, char** argv) {
               << std::endl;
   }
 
-  if (args.print_output) {
+  if (opts.print_output) {
     // TODO
   }
 
