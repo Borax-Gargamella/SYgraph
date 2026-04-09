@@ -4,6 +4,7 @@
  */
 #pragma once
 
+#include "sygraph/operators/config.hpp"
 #include <sycl/sycl.hpp>
 
 #include <sygraph/frontier/frontier.hpp>
@@ -25,7 +26,7 @@
 namespace sygraph {
 namespace algorithms {
 
-enum class BFSDirection { push, pull, hybrid };
+enum class bfs_direction { push, pull, hybrid };
 
 struct BFSRunDetails {
   size_t iterations = 0;
@@ -140,7 +141,7 @@ public:
    * @tparam EnableProfiling A boolean flag to enable profiling.
    * @throws std::runtime_error if the BFS instance is not initialized.
    */
-  BFSRunDetails run(BFSDirection direction = BFSDirection::push, float alpha = 1.0f, float beta = 1.0f) {
+  BFSRunDetails run(bfs_direction direction = bfs_direction::push, float alpha = 1.0f, float beta = 1.0f) {
     BFSRunDetails details;
     if (!_instance) { throw std::runtime_error("BFS instance not initialized"); }
 
@@ -179,7 +180,7 @@ public:
             }
             return false;
           },
-          sygraph::frontier::size::infer_from_device);
+          sygraph::frontier::size::fetch_from_memory);
     };
 
     auto pull_step = [&]() {
@@ -195,10 +196,10 @@ public:
                 }
                 return false;
               },
-              sygraph::frontier::size::infer_from_device);
+              sygraph::frontier::size::fetch_from_memory);
     };
 
-    bool push = direction != BFSDirection::pull;
+    bool push = direction != bfs_direction::pull;
     size_t n_push_step = 0;
     size_t n_pull_step = 0;
 
@@ -329,8 +330,8 @@ private:
   }
 
   template<typename F>
-  void evaluateHeuristic(const float alpha, const float beta, const F& frontier, BFSDirection direction, bool& push) {
-    if (direction == BFSDirection::hybrid) {
+  void evaluateHeuristic(const float alpha, const float beta, const F& frontier, bfs_direction direction, bool& push) {
+    if (direction == bfs_direction::hybrid) {
       if (push) {
         if (shouldSwitchToPull(frontier, alpha)) { push = false; }
       } else {

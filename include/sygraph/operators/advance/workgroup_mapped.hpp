@@ -36,10 +36,6 @@ SYCL_EXTERNAL inline uint32_t workgroupMappedUpperBound(const T* values, uint32_
   return left;
 }
 
-template<typename...>
-inline constexpr bool dependent_false_v = false;
-
-
 template<sygraph::operators::direction Direction, sygraph::frontier::frontier_view IFW, sygraph::frontier::frontier_view OFW>
 class workgroup_mapped_advance_kernel; // needed only for naming purposes
 

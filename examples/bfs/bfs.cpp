@@ -55,20 +55,20 @@ bool validate(const GraphT& graph, BfsT& bfs, uint source) {
   return mismatches == 0;
 }
 
-std::string directionToString(sygraph::algorithms::BFSDirection direction) {
+std::string directionToString(sygraph::algorithms::bfs_direction direction) {
   switch (direction) {
-    case sygraph::algorithms::BFSDirection::push: return "push";
-    case sygraph::algorithms::BFSDirection::pull: return "pull";
-    case sygraph::algorithms::BFSDirection::hybrid: return "hybrid";
+    case sygraph::algorithms::bfs_direction::push: return "push";
+    case sygraph::algorithms::bfs_direction::pull: return "pull";
+    case sygraph::algorithms::bfs_direction::hybrid: return "hybrid";
     default: return "push";
   }
 }
 
-sygraph::algorithms::BFSDirection parseAdvanceDirection(std::string value) {
+sygraph::algorithms::bfs_direction parseAdvanceDirection(std::string value) {
   std::transform(value.begin(), value.end(), value.begin(), [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
-  if (value == "pull") { return sygraph::algorithms::BFSDirection::pull; }
-  if (value == "hybrid") { return sygraph::algorithms::BFSDirection::hybrid; }
-  return sygraph::algorithms::BFSDirection::push;
+  if (value == "pull") { return sygraph::algorithms::bfs_direction::pull; }
+  if (value == "hybrid") { return sygraph::algorithms::bfs_direction::hybrid; }
+  return sygraph::algorithms::bfs_direction::push;
 }
 
 void printAdvanceDetails(const sygraph::algorithms::BFSRunDetails& details) {
@@ -136,7 +136,7 @@ int main(int argc, char** argv) {
   bfs.init(bfs_source);
 
   std::cout << "[*] Running BFS (" << directionToString(advance_direction) << " advance";
-  if (advance_direction == sygraph::algorithms::BFSDirection::hybrid) { std::cout << ", alpha=" << alpha << ", beta=" << beta; }
+  if (advance_direction == sygraph::algorithms::bfs_direction::hybrid) { std::cout << ", alpha=" << alpha << ", beta=" << beta; }
   std::cout << ") from source vertex " << bfs_source << std::endl;
   auto start_timer = std::chrono::high_resolution_clock::now();
   auto details = bfs.run(advance_direction, alpha, beta);
@@ -145,7 +145,7 @@ int main(int argc, char** argv) {
   std::cerr << "[!] Done" << std::endl;
 
   std::cerr << "Iterations: " << details.iterations << std::endl;
-  if (advance_direction == sygraph::algorithms::BFSDirection::hybrid) {
+  if (advance_direction == sygraph::algorithms::bfs_direction::hybrid) {
     std::cerr << "Push steps: " << details.push_steps.size() << std::endl;
     std::cerr << "Pull steps: " << details.pull_steps.size() << std::endl;
     printAdvanceDetails(details);
