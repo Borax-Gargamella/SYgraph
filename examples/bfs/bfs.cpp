@@ -100,7 +100,7 @@ int main(int argc, char** argv) {
   using type_t = unsigned int;
   GraphOptions opts;
   CLI::App app{"SYgraph example"};
-  auto source_option = configureBaseCLI(app, opts);
+  auto* source_option = configureBaseCLI(app, opts);
   std::string advance_mode = "push";
   float alpha = 15.0f;
   float beta = 24.0f;

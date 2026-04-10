@@ -37,9 +37,9 @@ struct GraphOptions {
 };
 
 inline CLI::Option* configureBaseCLI(CLI::App& app, GraphOptions& opts) {
-  auto binary_flag = app.add_flag("-b,--binary", opts.binary_format, "Treat input as binary CSR format");
-  auto matrix_flag = app.add_flag("-m,--matrix-market", opts.matrix_market, "Treat input as Matrix Market format");
-  if (binary_flag && matrix_flag) {
+  auto* binary_flag = app.add_flag("-b,--binary", opts.binary_format, "Treat input as binary CSR format");
+  auto* matrix_flag = app.add_flag("-m,--matrix-market", opts.matrix_market, "Treat input as Matrix Market format");
+  if ((binary_flag != nullptr) && (matrix_flag != nullptr)) {
     binary_flag->excludes(matrix_flag);
     matrix_flag->excludes(binary_flag);
   }
@@ -48,7 +48,7 @@ inline CLI::Option* configureBaseCLI(CLI::App& app, GraphOptions& opts) {
   app.add_flag("-v,--validate", opts.validate, "Validate algorithm output against CPU implementation");
   app.add_flag("-u,--undirected", opts.undirected, "Treat input COO as an undirected graph");
 
-  auto source_opt = app.add_option("-s,--source", opts.source, "Specify the source vertex");
+  CLI::Option* source_opt = app.add_option("-s,--source", opts.source, "Specify the source vertex");
   source_opt->check(CLI::NonNegativeNumber);
 
   app.add_option("graph", opts.path, "Path to the graph file")->required();
@@ -57,11 +57,7 @@ inline CLI::Option* configureBaseCLI(CLI::App& app, GraphOptions& opts) {
 }
 
 inline void finalizeGraphOptions(GraphOptions& opts, CLI::Option* source_opt) {
-  if (source_opt && source_opt->count() > 0) {
-    opts.random_source = false;
-  } else {
-    opts.random_source = true;
-  }
+  opts.random_source = (source_opt == nullptr) || source_opt->count() <= 0;
 }
 
 template<typename ValueT, typename IndexT, typename OffsetT>
@@ -125,7 +121,7 @@ inline void printDeviceInfo(sycl::queue& queue, std::string prefix = "") {
   std::cerr << prefix << "Running on: " << "[" << device_backend << "] " << device_name << std::endl;
 }
 
-inline bool isConsoleOutput() { return static_cast<int>(static_cast<int>(isatty(STDOUT_FILENO) != 0)) != 0; }
+inline bool isConsoleOutput() { return static_cast<int>(isatty(STDOUT_FILENO) != 0) != 0; }
 
 inline std::string successString() {
   if (!isConsoleOutput()) { return "Success"; }

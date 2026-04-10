@@ -31,6 +31,15 @@ inline T* memoryAlloc(size_t n, sycl::queue& q) {
 }
 
 template<typename T>
+inline T* memoryAlloc(size_t n, sycl::queue& q, sygraph::memory::space s) {
+  if (s == space::host) return memoryAlloc<T, space::host>(n, q);
+  if (s == space::device) return memoryAlloc<T, space::device>(n, q);
+  if (s == space::shared) return memoryAlloc<T, space::shared>(n, q);
+
+  throw std::runtime_error("Unknown memory space");
+}
+
+template<typename T>
 inline void releaseUSM(T*& ptr, sycl::queue& q) {
   if (ptr == nullptr) { return; }
 
