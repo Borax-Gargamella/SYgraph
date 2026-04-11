@@ -1,9 +1,10 @@
+#include "test_utils.hpp"
 #include <iostream>
 #include <sycl/sycl.hpp>
 #include <sygraph/sygraph.hpp>
 
 int main() {
-  sycl::queue q{sycl::gpu_selector_v};
+  auto q = sygraph::tests::makeQueue();
 
   std::string mat = "4 4 8\n"
                     "1 2\n"

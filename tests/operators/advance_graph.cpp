@@ -1,3 +1,4 @@
+#include "test_utils.hpp"
 #include <chrono>
 #include <array>
 #include <sycl/sycl.hpp>
@@ -16,7 +17,7 @@ void run_graph_advance(GraphT& G) {
   auto device_graph = G.getDeviceGraph();
   sygraph::operators::advance::vertices<LoadBalancer, sygraph::frontier::frontier_view::vertex>(
       G, out_frontier, [=](auto u, auto, auto, auto) -> bool { return device_graph.getDegree(u) != 0; });
-  sygraph::operators::compute::execute(G, out_frontier, [=](auto v) { visited[v] = true; });
+  for (size_t i = 0; i < G.getVertexCount(); ++i) { visited[i] = out_frontier.check(i); }
 
   constexpr std::array<bool, 6> expected_visited{true, true, true, true, true, false};
   for (size_t i = 0; i < G.getVertexCount(); ++i) { assert(visited[i] == expected_visited[i]); }
@@ -25,7 +26,7 @@ void run_graph_advance(GraphT& G) {
 }
 
 int main() {
-  sycl::queue q{sycl::gpu_selector_v};
+  auto q = sygraph::tests::makeQueue();
 
   auto mat = sygraph::io::storage::matrices::two_cc;
   std::istringstream iss(mat.data());

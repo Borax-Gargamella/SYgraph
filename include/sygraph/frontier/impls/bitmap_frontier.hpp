@@ -361,8 +361,8 @@ public:
     return _queue.submit([&](sycl::handler& cgh) {
       auto bitmap = this->getDeviceFrontier();
       auto other_bitmap = other.getDeviceFrontier();
-      cgh.parallel_for<class merge_bitmap_frontier_kernel>(sycl::range<1>(bitmap.size),
-                                                           [=](sycl::id<1> idx) { bitmap.data[idx] |= other_bitmap.data[idx]; });
+      cgh.parallel_for<class merge_bitmap_frontier_kernel>(sycl::range<1>(bitmap.getBitmapSize()),
+                                                           [=](sycl::id<1> idx) { bitmap.getData()[idx] |= other_bitmap.getData()[idx]; });
     });
   }
 
@@ -377,8 +377,8 @@ public:
     return _queue.submit([&](sycl::handler& cgh) {
       auto bitmap = this->getDeviceFrontier();
       auto other_bitmap = other.getDeviceFrontier();
-      cgh.parallel_for<class intersect_bitmap_frontier_kernel>(sycl::range<1>(bitmap.size),
-                                                               [=](sycl::id<1> idx) { bitmap.data[idx] &= other_bitmap.data[idx]; });
+      cgh.parallel_for<class intersect_bitmap_frontier_kernel>(sycl::range<1>(bitmap.getBitmapSize()),
+                                                               [=](sycl::id<1> idx) { bitmap.getData()[idx] &= other_bitmap.getData()[idx]; });
     });
   }
 

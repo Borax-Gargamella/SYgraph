@@ -1,3 +1,4 @@
+#include "test_utils.hpp"
 #include <sstream>
 #include <sycl/sycl.hpp>
 #include <sygraph/sygraph.hpp>
@@ -31,7 +32,7 @@ int main() {
 #ifndef GENERATE_SAMPLE_DATA
   return 0;
 #else
-  sycl::queue q{sycl::gpu_selector_v};
+  auto q = sygraph::tests::makeQueue();
 
   buildAndDestroyGraphs<sygraph::memory::space::shared>(q);
   buildAndDestroyGraphs<sygraph::memory::space::device>(q);
