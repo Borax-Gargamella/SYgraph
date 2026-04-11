@@ -136,9 +136,7 @@ inline auto prepareAdvanceLaunch(GraphT& graph, const InFrontierT& in, const Out
   auto in_dev_frontier = in.getDeviceFrontier();
   auto out_dev_frontier = out.getDeviceFrontier();
   auto graph_dev = graph.getDeviceGraph();
-  if constexpr (Direction == sygraph::operators::direction::pull) {
-    graph_dev = graph.getInverseDeviceGraph();
-  }
+  if constexpr (Direction == sygraph::operators::direction::pull) { graph_dev = graph.getInverseDeviceGraph(); }
 
   const size_t coarsening_factor = types::detail::COMPUTE_UNIT_SIZE / sygraph::detail::device::getSubgroupSize(q);
   const bool pull_advance = (Direction == sygraph::operators::direction::pull);

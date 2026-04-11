@@ -310,7 +310,7 @@ public:
     return size_acc[0];
   }
 
-  void merge(FrontierMLB<T>& other) {
+  void merge(const FrontierMLB<T>& other) {
     auto e = _queue.submit([&](sycl::handler& cgh) {
       auto bitmap = this->getDeviceFrontier();
       auto other_bitmap = other.getDeviceFrontier();
@@ -323,7 +323,7 @@ public:
 #endif
   }
 
-  void intersect(FrontierMLB<T>& other) {
+  void intersect(const FrontierMLB<T>& other) {
     auto e = _queue.submit([&](sycl::handler& cgh) {
       auto bitmap = this->getDeviceFrontier();
       auto other_bitmap = other.getDeviceFrontier();

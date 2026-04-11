@@ -357,7 +357,7 @@ public:
    * @return The event associated with the operation.
    * @post The current frontier contains the union of the current frontier and the specified frontier. The specified frontier is not modified.
    */
-  sygraph::Event merge(FrontierBitmap<T>& other) {
+  sygraph::Event merge(const FrontierBitmap<T>& other) {
     return _queue.submit([&](sycl::handler& cgh) {
       auto bitmap = this->getDeviceFrontier();
       auto other_bitmap = other.getDeviceFrontier();
@@ -373,7 +373,7 @@ public:
    * @return The event associated with the operation.
    * @post The current frontier contains the intersection of the current frontier and the specified frontier. The specified frontier is not modified.
    */
-  sygraph::Event intersect(FrontierBitmap<T>& other) {
+  sygraph::Event intersect(const FrontierBitmap<T>& other) {
     return _queue.submit([&](sycl::handler& cgh) {
       auto bitmap = this->getDeviceFrontier();
       auto other_bitmap = other.getDeviceFrontier();
