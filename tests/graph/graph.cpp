@@ -1,8 +1,9 @@
+#include "test_utils.hpp"
 #include <sycl/sycl.hpp>
 #include <sygraph/sygraph.hpp>
 
 int main() {
-  sycl::queue q{sycl::gpu_selector_v};
+  auto q = sygraph::tests::makeQueue();
 
   auto mat = sygraph::io::storage::matrices::symmetric_6nodes;
   std::istringstream iss(mat.data());

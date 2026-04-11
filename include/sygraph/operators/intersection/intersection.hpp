@@ -45,7 +45,7 @@ template<graph::detail::GraphConcept GraphT, typename T, sygraph::frontier::fron
 sygraph::Event execute(GraphT& graph,
                        const sygraph::frontier::Frontier<T, FrontierType>& in1,
                        const sygraph::frontier::Frontier<T, FrontierType>& in2,
-                       const sygraph::frontier::Frontier<T, FrontierType>& out,
+                       sygraph::frontier::Frontier<T, FrontierType>& out,
                        LambdaT&& functor) {
   if constexpr (FrontierType == sygraph::frontier::frontier_type::bitmap) {
     return sygraph::operators::intersection::detail::bitmapExecute(graph, in1, in2, out, std::forward<LambdaT>(functor));

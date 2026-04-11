@@ -31,12 +31,23 @@ struct BucketingContext : AdvanceContextBase<IFW, OFW, Direction, InFrontierDevT
   using Base::Base;
 
   SYCL_EXTERNAL inline AdvanceContextState init(sycl::nd_item<1>& item) const {
-    return {
-        item.get_group_linear_id(),
-        static_cast<uint16_t>(item.get_local_range(0) / this->in_dev_frontier.getBitmapRange()),
-        this->in_dev_frontier.getOffsetsSize()[0],
-        item,
-    };
+    if constexpr (IFW == sygraph::frontier::frontier_view::vertex) {
+      return {
+          item.get_group_linear_id(),
+          static_cast<uint16_t>(item.get_local_range(0) / this->in_dev_frontier.getBitmapRange()),
+          this->in_dev_frontier.getOffsetsSize()[0],
+          item,
+      };
+    } else if constexpr (IFW == sygraph::frontier::frontier_view::graph) {
+      return {
+          item.get_group_linear_id(),
+          static_cast<uint16_t>(item.get_local_range(0)),
+          static_cast<uint32_t>(this->limit),
+          item,
+      };
+    } else {
+      return {0, 0, 0, item};
+    }
   }
 
   SYCL_EXTERNAL inline size_t getAssignedElement(const AdvanceContextState& state) const {

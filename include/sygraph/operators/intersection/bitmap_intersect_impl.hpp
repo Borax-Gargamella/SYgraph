@@ -22,8 +22,8 @@ template<graph::detail::GraphConcept GraphT, typename T, typename LambdaT>
 sygraph::Event bitmapExecute(GraphT& graph,
                              const sygraph::frontier::Frontier<T, sygraph::frontier::frontier_type::bitmap>& in1,
                              const sygraph::frontier::Frontier<T, sygraph::frontier::frontier_type::bitmap>& in2,
-                             const sygraph::frontier::Frontier<T, sygraph::frontier::frontier_type::bitmap>& out,
-                             LambdaT&& functor) {
+                             sygraph::frontier::Frontier<T, sygraph::frontier::frontier_type::bitmap>& out,
+                             LambdaT&&) {
   out.clear();
   out.merge(in1).wait();
   return out.intersect(in2);

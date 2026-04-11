@@ -1,10 +1,11 @@
+#include "test_utils.hpp"
 #include <sycl/sycl.hpp>
 #include <sygraph/sygraph.hpp>
 
 constexpr size_t NUM_ELEMS = 128;
 
 int main() {
-  sycl::queue q{sycl::gpu_selector_v};
+  auto q = sygraph::tests::makeQueue();
 
   sygraph::frontier::Frontier<size_t> f{q, NUM_ELEMS};
   auto n = f.getNumElems();

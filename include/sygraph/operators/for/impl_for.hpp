@@ -22,9 +22,6 @@ namespace compute {
 
 namespace detail {
 
-class functor_kernel;
-class reducer_kernel;
-
 template<frontier::frontier_view FW, graph::detail::GraphConcept GraphT, typename InFrontierT>
 inline sygraph::detail::kernel::LaunchConfig buildLaunchConfig(const GraphT& graph, const InFrontierT& in, int expected_size, sycl::queue& q) {
   sygraph::detail::kernel::LaunchConfig config{};
@@ -67,7 +64,7 @@ sygraph::Event launchBitmapKernel(GraphT& graph,
   size_t bitmap_range = frontier.getBitmapRange();
 
   return q.submit([&](sycl::handler& cgh) {
-    cgh.parallel_for<functor_kernel>(sycl::nd_range<1>{config.global, config.local}, [=](sycl::nd_item<1> item) {
+    cgh.parallel_for(sycl::nd_range<1>{config.global, config.local}, [=](sycl::nd_item<1> item) {
       auto lid = item.get_local_id();
       auto group_id = item.get_group_linear_id();
       auto local_size = item.get_local_range()[0];
@@ -99,8 +96,8 @@ sygraph::Event launchBitmapReduce(GraphT& graph,
   accumulator_buf.set_write_back(true);
 
   return q.submit([&](sycl::handler& cgh) {
-    auto sumReduction = sycl::reduction<R>(accumulator_buf, cgh, sycl::plus<R>());
-    cgh.parallel_for<reducer_kernel>(sycl::nd_range<1>{config.global, config.local}, sumReduction, [=](sycl::nd_item<1> item, auto& acc) {
+    auto sum_reduction = sycl::reduction<R>(accumulator_buf, cgh, sycl::plus<R>());
+    cgh.parallel_for(sycl::nd_range<1>{config.global, config.local}, sum_reduction, [=](sycl::nd_item<1> item, auto& acc) {
       auto lid = item.get_local_id();
       auto group_id = item.get_group_linear_id();
       auto local_size = item.get_local_range()[0];

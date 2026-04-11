@@ -1,3 +1,4 @@
+#include "test_utils.hpp"
 #include <chrono>
 #include <array>
 #include <sycl/sycl.hpp>
@@ -48,7 +49,7 @@ void run_bfs(GraphT& G) {
 }
 
 int main() {
-  sycl::queue q{sycl::gpu_selector_v};
+  auto q = sygraph::tests::makeQueue();
 
   auto mat = sygraph::io::storage::matrices::symmetric_6nodes;
   std::istringstream iss(mat.data());

@@ -94,7 +94,12 @@ buildAdvanceLaunchConfig(GraphT& graph, const InFrontierT& in, bool pull_advance
   if constexpr (InFW == sygraph::frontier::frontier_view::vertex) {
     const size_t bitmap_range = in.getBitmapRange();
     config.local = {bitmap_range * coarsening_factor};
-    config.dependency = in.computeActiveFrontier(pull_advance);
+    uint32_t active_size = 0;
+    if constexpr (requires { in.computeActiveFrontier(pull_advance); }) {
+      config.dependency = in.computeActiveFrontier(pull_advance);
+    } else {
+      active_size = static_cast<uint32_t>(in.computeActiveFrontier());
+    }
 
     size_t requested_global = 0;
     if (expected_size > 0) {
@@ -102,13 +107,14 @@ buildAdvanceLaunchConfig(GraphT& graph, const InFrontierT& in, bool pull_advance
     } else if (expected_size == frontier::size::infer_from_device) {
       requested_global = config.local[0] * (sygraph::detail::device::getNumComputeUnits(q) * coarsening_factor);
     } else if (expected_size == frontier::size::fetch_from_memory) {
-      config.dependency.wait_and_throw();
-      uint32_t active_size = 0;
-      auto copy_e = q.copy(in_dev_frontier.getOffsetsSize(), &active_size, 1);
-      copy_e.wait();
+      if constexpr (requires { in.computeActiveFrontier(pull_advance); }) {
+        config.dependency.wait_and_throw();
+        auto copy_e = q.copy(in_dev_frontier.getOffsetsSize(), &active_size, 1);
+        copy_e.wait();
 #ifdef ENABLE_PROFILING
-      sygraph::Profiler::addEvent(copy_e, "frontier_size_fetch");
+        sygraph::Profiler::addEvent(copy_e, "frontier_size_fetch");
 #endif
+      }
       requested_global = static_cast<size_t>(active_size) * bitmap_range;
     } else {
       throw std::runtime_error("Invalid expected_size value");
