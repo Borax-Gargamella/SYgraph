@@ -31,6 +31,8 @@ struct GraphOptions {
   bool binary_format = false;
   bool matrix_market = false;
   bool undirected = false;
+  bool profile_summary = false;
+  bool profile_detailed = false;
   bool random_source = true;
   std::string path;
   size_t source = 0;
@@ -45,7 +47,14 @@ inline CLI::Option* configureBaseCLI(CLI::App& app, GraphOptions& opts) {
   }
 
   app.add_flag("-p,--print", opts.print_output, "Print algorithm output to stdout");
-  app.add_flag("-v,--validate", opts.validate, "Validate algorithm output against CPU implementation");
+  auto* profile_summary_flag = app.add_flag("-v", opts.profile_summary, "Print grouped kernel timing summary");
+  auto* profile_detailed_flag = app.add_flag("-V", opts.profile_detailed, "Print detailed timing for each kernel invocation");
+  if ((profile_summary_flag != nullptr) && (profile_detailed_flag != nullptr)) {
+    profile_summary_flag->excludes(profile_detailed_flag);
+    profile_detailed_flag->excludes(profile_summary_flag);
+  }
+
+  app.add_flag("-c,--validate", opts.validate, "Validate algorithm output against CPU implementation");
   app.add_flag("-u,--undirected", opts.undirected, "Treat input COO as an undirected graph");
 
   CLI::Option* source_opt = app.add_option("-s,--source", opts.source, "Specify the source vertex");
@@ -131,4 +140,16 @@ inline std::string successString() {
 inline std::string failString() {
   if (!isConsoleOutput()) { return "Failed"; }
   return "\033[1;31mFailed\033[0m";
+}
+
+inline void printProfilingOutput(const GraphOptions& opts) {
+#ifdef ENABLE_PROFILING
+  if (opts.profile_detailed) {
+    sygraph::Profiler::print(true);
+  } else if (opts.profile_summary) {
+    sygraph::Profiler::print(false);
+  }
+#else
+  (void)opts;
+#endif
 }

@@ -180,7 +180,7 @@ public:
             }
             return false;
           },
-          sygraph::frontier::size::infer_from_device);
+          sygraph::frontier::size::fetch_from_memory);
     };
 
     auto pull_step = [&]() {
@@ -196,7 +196,7 @@ public:
                 }
                 return false;
               },
-              sygraph::frontier::size::infer_from_device);
+              sygraph::frontier::size::fetch_from_memory);
     };
 
     bool push = direction != bfs_direction::pull;

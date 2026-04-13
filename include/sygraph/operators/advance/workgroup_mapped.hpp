@@ -82,6 +82,7 @@ struct WorkgroupMappedContext : AdvanceContextBase<IFW, OFW, Direction, InFronti
 
 template<sygraph::frontier::frontier_view InFW,
          sygraph::frontier::frontier_view OutFW,
+         sygraph::operators::direction Direction,
          typename T,
          typename ContextT,
          graph::detail::DeviceGraphConcept GraphDevT,
@@ -111,11 +112,13 @@ struct WorkgroupMappedBitmapKernel {
 
       scan_begins[lid] = exclusive_begin;
       scan_ends[lid] = exclusive_begin + degree;
+      source_done[lid] = 0;
       sycl::group_barrier(wgroup);
 
       for (uint32_t edge_rank = static_cast<uint32_t>(lid); edge_rank < total_edges; edge_rank += static_cast<uint32_t>(wgroup_size)) {
         const uint32_t slot = workgroupMappedUpperBound(&scan_ends[0], static_cast<uint32_t>(wgroup_size), edge_rank);
         if (slot >= wgroup_size) { continue; }
+        if (shouldShortCircuitSlot(slot)) { continue; }
 
         const uint32_t source = vertices[slot];
         if (source == UINT32_MAX) { continue; }
@@ -126,7 +129,7 @@ struct WorkgroupMappedBitmapKernel {
 
         const auto weight = graph_dev.getEdgeWeight(edge);
         const auto neighbor = graph_dev.getDestinationVertex(edge);
-        if (context.isValidNeighbor(state, neighbor) && functor(source, neighbor, edge, weight)) { context.insert(state, source, neighbor); }
+        processEdge(state, source, neighbor, edge, weight, slot);
       }
 
       sycl::group_barrier(wgroup);
@@ -140,7 +143,34 @@ struct WorkgroupMappedBitmapKernel {
   const sycl::local_accessor<uint32_t, 1> start_edges;
   const sycl::local_accessor<uint32_t, 1> scan_begins;
   const sycl::local_accessor<uint32_t, 1> scan_ends;
+  const sycl::local_accessor<uint32_t, 1> source_done;
   const LambdaT functor;
+
+  SYCL_EXTERNAL inline bool shouldShortCircuitSlot(const uint32_t slot) const {
+    if constexpr (Direction == sygraph::operators::direction::pull) {
+      sycl::atomic_ref<uint32_t, sycl::memory_order::relaxed, sycl::memory_scope::work_group> slot_done(source_done[slot]);
+      return slot_done.load() != 0;
+    } else {
+      return false;
+    }
+  }
+
+  template<typename WeightT>
+  SYCL_EXTERNAL inline bool processEdge(const AdvanceContextState& state,
+                                        const uint32_t source,
+                                        const uint32_t neighbor,
+                                        const uint32_t edge,
+                                        const WeightT& weight,
+                                        const uint32_t slot) const {
+    if (!context.isValidNeighbor(state, neighbor)) { return false; }
+    if (!functor(source, neighbor, edge, weight)) { return false; }
+    context.insert(state, source, neighbor);
+    if constexpr (Direction == sygraph::operators::direction::pull) {
+      sycl::atomic_ref<uint32_t, sycl::memory_order::relaxed, sycl::memory_scope::work_group> slot_done(source_done[slot]);
+      slot_done.store(1);
+    }
+    return true;
+  }
 };
 
 namespace workgroup_mapped {
@@ -163,7 +193,7 @@ sygraph::Event launchBitmapKernel(GraphT& graph, const InFrontierT& in, const Ou
   using element_t = advance_element_t<InFW, GraphT>;
   WorkgroupMappedContext<InFW, OutFW, Direction, decltype(launch.in_dev_frontier), decltype(launch.out_dev_frontier)> context{
       launch.num_nodes, launch.in_dev_frontier, launch.out_dev_frontier};
-  using bitmap_kernel_t = WorkgroupMappedBitmapKernel<InFW, OutFW, element_t, decltype(context), decltype(launch.graph_dev), LambdaT>;
+  using bitmap_kernel_t = WorkgroupMappedBitmapKernel<InFW, OutFW, Direction, element_t, decltype(context), decltype(launch.graph_dev), LambdaT>;
 
   auto e = launch.q.submit([&](sycl::handler& cgh) {
     cgh.depends_on(dependency);
@@ -171,15 +201,11 @@ sygraph::Event launchBitmapKernel(GraphT& graph, const InFrontierT& in, const Ou
     sycl::local_accessor<uint32_t, 1> start_edges{local_range, cgh};
     sycl::local_accessor<uint32_t, 1> scan_begins{local_range, cgh};
     sycl::local_accessor<uint32_t, 1> scan_ends{local_range, cgh};
+    sycl::local_accessor<uint32_t, 1> source_done{local_range, cgh};
 
-    cgh.parallel_for<workgroup_mapped_advance_kernel<Direction, InFW, OutFW>>(sycl::nd_range<1>{global_range, local_range},
-                                                                              bitmap_kernel_t{context,
-                                                                                              launch.graph_dev,
-                                                                                              vertices,
-                                                                                              start_edges,
-                                                                                              scan_begins,
-                                                                                              scan_ends,
-                                                                                              std::forward<LambdaT>(functor)});
+    cgh.parallel_for<workgroup_mapped_advance_kernel<Direction, InFW, OutFW>>(
+        sycl::nd_range<1>{global_range, local_range},
+        bitmap_kernel_t{context, launch.graph_dev, vertices, start_edges, scan_begins, scan_ends, source_done, std::forward<LambdaT>(functor)});
   });
   return {e};
 }
@@ -188,4 +214,4 @@ sygraph::Event launchBitmapKernel(GraphT& graph, const InFrontierT& in, const Ou
 } // namespace detail
 } // namespace advance
 } // namespace operators
-}
+} // namespace sygraph

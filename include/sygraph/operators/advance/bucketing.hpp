@@ -67,6 +67,7 @@ struct BucketingContext : AdvanceContextBase<IFW, OFW, Direction, InFrontierDevT
 
 template<sygraph::frontier::frontier_view InFW,
          sygraph::frontier::frontier_view OutFW,
+         sygraph::operators::direction Direction,
          typename T,
          typename ContextT,
          graph::detail::DeviceGraphConcept GraphDevT,
@@ -94,6 +95,8 @@ struct BitmapKernel {
       // Reset local reductions so the group can classify work for this iteration.
       if (sgroup.leader()) { subgroup_reduce_tail[sgroup_id] = 0; }
       if (wgroup.leader()) { workgroup_reduce_tail[0] = 0; }
+      workgroup_claimed[lid] = 0;
+      subgroup_claimed[lid] = 0;
 
 
       const uint32_t offset = sgroup_id * sgroup_size;
@@ -124,11 +127,12 @@ struct BitmapKernel {
         auto start = graph_dev.begin(vertex);
 
         for (auto j = lid; j < n_edges; j += wgroup_size) {
+          if (shouldShortCircuitWorkgroup(i)) { break; }
           auto n = start + j;
           const auto edge = n.getIndex();
           const auto weight = graph_dev.getEdgeWeight(edge);
           const auto neighbor = *n;
-          if (context.isValidNeighbor(state, neighbor) && functor(vertex, neighbor, edge, weight)) { context.insert(state, vertex, neighbor); }
+          processEdge(state, vertex, neighbor, edge, weight, workgroup_claimed, i);
         }
 
         if (wgroup.leader()) { visited[workgroup_ids[i]] = true; }
@@ -144,11 +148,12 @@ struct BitmapKernel {
         auto start = graph_dev.begin(vertex);
 
         for (auto j = llid; j < n_edges; j += sgroup_size) {
+          if (shouldShortCircuitSubgroup(vertex_id)) { break; }
           auto n = start + j;
           const auto edge = n.getIndex();
           const auto weight = graph_dev.getEdgeWeight(edge);
           const auto neighbor = *n;
-          if (context.isValidNeighbor(state, neighbor) && functor(vertex, neighbor, edge, weight)) { context.insert(state, vertex, neighbor); }
+          processEdge(state, vertex, neighbor, edge, weight, subgroup_claimed, vertex_id);
         }
 
         if (sgroup.leader()) { visited[subgroup_ids[vertex_id]] = true; }
@@ -165,7 +170,10 @@ struct BitmapKernel {
           const auto edge = n.getIndex();
           const auto weight = graph_dev.getEdgeWeight(edge);
           const auto neighbor = *n;
-          if (context.isValidNeighbor(state, neighbor) && functor(vertex, neighbor, edge, weight)) { context.insert(state, vertex, neighbor); }
+          if (!context.isValidNeighbor(state, neighbor)) { continue; }
+          if (!functor(vertex, neighbor, edge, weight)) { continue; }
+          context.insert(state, vertex, neighbor);
+          if (shouldShortCircuitLane()) { break; }
         }
       }
       context.completeIteration(state);
@@ -180,10 +188,51 @@ struct BitmapKernel {
   const sycl::local_accessor<T, 1> subgroup_reduce;
   const sycl::local_accessor<uint32_t, 1> subgroup_reduce_tail;
   const sycl::local_accessor<uint32_t, 1> subgroup_ids;
+  const sycl::local_accessor<uint32_t, 1> subgroup_claimed;
   const sycl::local_accessor<T, 1> workgroup_reduce;
   const sycl::local_accessor<uint32_t, 1> workgroup_reduce_tail;
   const sycl::local_accessor<uint32_t, 1> workgroup_ids;
+  const sycl::local_accessor<uint32_t, 1> workgroup_claimed;
   const LambdaT functor;
+
+  template<typename WeightT, typename FlagAccessorT>
+  SYCL_EXTERNAL inline bool processEdge(const AdvanceContextState& state,
+                                        const uint32_t vertex,
+                                        const uint32_t neighbor,
+                                        const uint32_t edge,
+                                        const WeightT& weight,
+                                        const FlagAccessorT& flags,
+                                        const uint32_t flag_index) const {
+    if (!context.isValidNeighbor(state, neighbor)) { return false; }
+    if (!functor(vertex, neighbor, edge, weight)) { return false; }
+    context.insert(state, vertex, neighbor);
+    if constexpr (Direction == sygraph::operators::direction::pull) {
+      sycl::atomic_ref<uint32_t, sycl::memory_order::relaxed, sycl::memory_scope::work_group> claimed(flags[flag_index]);
+      claimed.store(1);
+    }
+    return true;
+  }
+
+  SYCL_EXTERNAL inline bool shouldShortCircuitWorkgroup(const uint32_t slot) const {
+    if constexpr (Direction == sygraph::operators::direction::pull) {
+      sycl::atomic_ref<uint32_t, sycl::memory_order::relaxed, sycl::memory_scope::work_group> claimed(workgroup_claimed[slot]);
+      return claimed.load() != 0;
+    }
+    return false;
+  }
+
+  SYCL_EXTERNAL inline bool shouldShortCircuitSubgroup(const uint32_t slot) const {
+    if constexpr (Direction == sygraph::operators::direction::pull) {
+      sycl::atomic_ref<uint32_t, sycl::memory_order::relaxed, sycl::memory_scope::work_group> claimed(subgroup_claimed[slot]);
+      return claimed.load() != 0;
+    }
+    return false;
+  }
+
+  SYCL_EXTERNAL inline bool shouldShortCircuitLane() const {
+    if constexpr (Direction == sygraph::operators::direction::pull) { return true; }
+    return false;
+  }
 };
 
 namespace bucketing {
@@ -206,9 +255,8 @@ sygraph::Event launchBitmapKernel(GraphT& graph, const InFrontierT& in, const Ou
   using element_t = advance_element_t<InFW, GraphT>;
   BucketingContext<InFW, OutFW, Direction, decltype(launch.in_dev_frontier), decltype(launch.out_dev_frontier)> context{
       launch.num_nodes, launch.in_dev_frontier, launch.out_dev_frontier};
-  using bitmap_kernel_t = BitmapKernel<InFW, OutFW, element_t, decltype(context), decltype(launch.graph_dev), LambdaT>;
-
   const uint32_t max_num_subgroups = sygraph::detail::device::getMaxNumSubgroups(launch.q);
+  using bitmap_kernel_t = BitmapKernel<InFW, OutFW, Direction, element_t, decltype(context), decltype(launch.graph_dev), LambdaT>;
 
   auto e = launch.q.submit([&](sycl::handler& cgh) {
     cgh.depends_on(dependency);
@@ -219,23 +267,27 @@ sygraph::Event launchBitmapKernel(GraphT& graph, const InFrontierT& in, const Ou
     sycl::local_accessor<element_t, 1> subgroup_reduce{local_range, cgh};
     sycl::local_accessor<uint32_t, 1> subgroup_reduce_tail{max_num_subgroups, cgh};
     sycl::local_accessor<uint32_t, 1> subgroup_ids{local_range, cgh};
+    sycl::local_accessor<uint32_t, 1> subgroup_claimed{local_range, cgh};
     sycl::local_accessor<element_t, 1> workgroup_reduce{local_range, cgh};
     sycl::local_accessor<uint32_t, 1> workgroup_reduce_tail{1, cgh};
     sycl::local_accessor<uint32_t, 1> workgroup_ids{local_range, cgh};
+    sycl::local_accessor<uint32_t, 1> workgroup_claimed{local_range, cgh};
 
     cgh.parallel_for<bucketing_advance_kernel<Direction, InFW, OutFW>>(sycl::nd_range<1>{global_range, local_range},
-                                                                              bitmap_kernel_t{context,
-                                                                                              launch.graph_dev,
-                                                                                              n_edges_wg,
-                                                                                              n_edges_sg,
-                                                                                              visited,
-                                                                                              subgroup_reduce,
-                                                                                              subgroup_reduce_tail,
-                                                                                              subgroup_ids,
-                                                                                              workgroup_reduce,
-                                                                                              workgroup_reduce_tail,
-                                                                                              workgroup_ids,
-                                                                                              std::forward<LambdaT>(functor)});
+                                                                       bitmap_kernel_t{context,
+                                                                                       launch.graph_dev,
+                                                                                       n_edges_wg,
+                                                                                       n_edges_sg,
+                                                                                       visited,
+                                                                                       subgroup_reduce,
+                                                                                       subgroup_reduce_tail,
+                                                                                       subgroup_ids,
+                                                                                       subgroup_claimed,
+                                                                                       workgroup_reduce,
+                                                                                       workgroup_reduce_tail,
+                                                                                       workgroup_ids,
+                                                                                       workgroup_claimed,
+                                                                                       std::forward<LambdaT>(functor)});
   });
   return {e};
 }

@@ -62,9 +62,9 @@ public:
 
   MLBDevice(size_t num_elems) : _num_elems(num_elems) {
     _range = sizeof(bitmap_type) * sygraph::types::detail::byte_size;
-    _size[0] = num_elems / _range + (num_elems % _range != 0);
+    _size[0] = (num_elems / _range) + static_cast<size_t>(num_elems % _range != 0);
 
-    for (uint16_t i = 1; i < Levels; i++) { _size[i] = _size[i - 1] / _range + (_size[i - 1] % _range != 0); }
+    for (uint16_t i = 1; i < Levels; i++) { _size[i] = (_size[i - 1] / _range) + (_size[i - 1] % _range != 0); }
   }
 
   SYCL_EXTERNAL inline uint32_t getBitmapSize() const { return _size[0]; }
@@ -310,7 +310,7 @@ public:
     return size_acc[0];
   }
 
-  void merge(FrontierMLB<T>& other) {
+  void merge(const FrontierMLB<T>& other) {
     auto e = _queue.submit([&](sycl::handler& cgh) {
       auto bitmap = this->getDeviceFrontier();
       auto other_bitmap = other.getDeviceFrontier();
@@ -323,7 +323,7 @@ public:
 #endif
   }
 
-  void intersect(FrontierMLB<T>& other) {
+  void intersect(const FrontierMLB<T>& other) {
     auto e = _queue.submit([&](sycl::handler& cgh) {
       auto bitmap = this->getDeviceFrontier();
       auto other_bitmap = other.getDeviceFrontier();
@@ -416,11 +416,11 @@ public:
                 bool is_active = (data & (static_cast<bitmap_type>(1) << i)) != 0;
                 uint32_t pos;
                 if ((!invert && !is_active)
-                    || (invert && (is_active && bitmap.getData(0)[i + gid * range] == std::numeric_limits<bitmap_type>::max()))) {
+                    || (invert && is_active && (bitmap.getData(0)[i + (gid * range)] == std::numeric_limits<bitmap_type>::max()))) {
                   continue;
                 }
 
-                local_offsets[local_size_ref++] = static_cast<int>(i + gid * range);
+                local_offsets[local_size_ref++] = static_cast<int>(i + (gid * range));
               }
             }
 

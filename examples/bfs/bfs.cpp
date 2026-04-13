@@ -177,9 +177,7 @@ int main(int argc, char** argv) {
     }
   }
 
-#ifdef ENABLE_PROFILING
-  sygraph::Profiler::print();
-#endif
+  printProfilingOutput(opts);
   std::cout << "Total Host Time: " << std::chrono::duration_cast<std::chrono::milliseconds>(end_timer - start_timer).count() << " ms" << std::endl;
   return 0;
 }

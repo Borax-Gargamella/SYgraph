@@ -105,7 +105,9 @@ buildAdvanceLaunchConfig(GraphT& graph, const InFrontierT& in, bool pull_advance
     if (expected_size > 0) {
       requested_global = static_cast<size_t>(expected_size);
     } else if (expected_size == frontier::size::infer_from_device) {
-      requested_global = config.local[0] * (sygraph::detail::device::getNumComputeUnits(q) * coarsening_factor);
+      // `coarsening_factor` is already encoded in the work-group width:
+      // each work-group covers `coarsening_factor` bitmap-offset integers.
+      requested_global = config.local[0] * sygraph::detail::device::getNumComputeUnits(q);
     } else if (expected_size == frontier::size::fetch_from_memory) {
       if constexpr (requires { in.computeActiveFrontier(pull_advance); }) {
         config.dependency.wait_and_throw();
@@ -142,9 +144,7 @@ inline auto prepareAdvanceLaunch(GraphT& graph, const InFrontierT& in, const Out
   auto in_dev_frontier = in.getDeviceFrontier();
   auto out_dev_frontier = out.getDeviceFrontier();
   auto graph_dev = graph.getDeviceGraph();
-  if constexpr (Direction == sygraph::operators::direction::pull) {
-    graph_dev = graph.getInverseDeviceGraph();
-  }
+  if constexpr (Direction == sygraph::operators::direction::pull) { graph_dev = graph.getInverseDeviceGraph(); }
 
   const size_t coarsening_factor = types::detail::COMPUTE_UNIT_SIZE / sygraph::detail::device::getSubgroupSize(q);
   const bool pull_advance = (Direction == sygraph::operators::direction::pull);
