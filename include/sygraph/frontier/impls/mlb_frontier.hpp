@@ -416,7 +416,7 @@ public:
                 bool is_active = (data & (static_cast<bitmap_type>(1) << i)) != 0;
                 uint32_t pos;
                 if ((!invert && !is_active)
-                    || (invert && (is_active && bitmap.getData(0)[i + gid * range] == std::numeric_limits<bitmap_type>::max()))) {
+                    || (invert && is_active && (bitmap.getData(0)[i + (gid * range)] == std::numeric_limits<bitmap_type>::max()))) {
                   continue;
                 }
 
