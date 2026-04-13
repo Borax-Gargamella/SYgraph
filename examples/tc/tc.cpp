@@ -62,7 +62,5 @@ int main(int argc, char** argv) {
     std::cout << "Total num triangles: " << tc.getNumTriangles() << std::endl;
   }
 
-#ifdef ENABLE_PROFILING
-  sygraph::Profiler::print();
-#endif
+  printProfilingOutput(opts);
 }

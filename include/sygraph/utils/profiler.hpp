@@ -36,23 +36,26 @@ public:
   }
 
   static void print(bool detailed = false) {
-    double milliseconds = 0.0;
     double total_ms = 0.0;
     for (auto& [tag, events] : detail::events) {
+      double milliseconds = 0.0;
       size_t i = 0;
+      std::cout << " Kernel [" << tag << " x " << events.size() << "] ";
       for (auto& event : events) {
         double event_time = static_cast<double>(event.get_profiling_info<sycl::info::event_profiling::command_end>()
                                                 - event.get_profiling_info<sycl::info::event_profiling::command_start>())
                             / 1e6;
-        if (detailed) { std::cout << "#" << i++ << " [" << tag << "] " << event_time << " ms" << std::endl; }
+        if (detailed) { std::cout << "(" << i++ << ") " << event_time << " ms "; }
         milliseconds += event_time;
       }
-      std::cout << " Kernel [" << tag << " x " << events.size() << "] Time: " << milliseconds << " ms" << std::endl;
+      if (detailed) { std::cout << "| "; }
+      std::cout << "Time: " << milliseconds << " ms" << std::endl;
       total_ms += milliseconds;
-      milliseconds = 0.0;
     }
     std::cout << "Total GPU Time: " << total_ms << " ms" << std::endl;
-    std::cout << "Total Edge-Througput (MTEPS): " << ((detail::num_visited_edges / 1e6) / (total_ms / 1e3)) << " MTEPS" << std::endl;
+    double mteps = 0.0;
+    if (total_ms > 0.0) { mteps = ((detail::num_visited_edges / 1e6) / (total_ms / 1e3)); }
+    std::cout << "Total Edge-Througput (MTEPS): " << mteps << " MTEPS" << std::endl;
   }
 };
 

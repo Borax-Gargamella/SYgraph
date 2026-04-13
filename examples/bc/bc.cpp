@@ -73,7 +73,5 @@ int main(int argc, char** argv) {
   //   }
   // }
 
-#ifdef ENABLE_PROFILING
-  sygraph::Profiler::print();
-#endif
+  printProfilingOutput(opts);
 }
