@@ -107,13 +107,15 @@ struct WorkgroupMappedBitmapKernel {
       vertices[lid] = vertex_active ? assigned_vertex : UINT32_MAX;
       start_edges[lid] = vertex_active ? static_cast<uint32_t>(graph_dev.getFirstNeighbor(assigned_vertex)) : 0U;
 
-      const uint32_t exclusive_begin = sycl::exclusive_scan_over_group(wgroup, degree, sycl::plus<uint32_t>());
-      const uint32_t total_edges = sycl::reduce_over_group(wgroup, degree, sycl::plus<uint32_t>());
+      const uint32_t inclusive_end = sycl::inclusive_scan_over_group(wgroup, degree, sycl::plus<uint32_t>());
+      const uint32_t exclusive_begin = inclusive_end - degree;
 
       scan_begins[lid] = exclusive_begin;
-      scan_ends[lid] = exclusive_begin + degree;
+      scan_ends[lid] = inclusive_end;
       source_done[lid] = 0;
       sycl::group_barrier(wgroup);
+      // The last lane's inclusive prefix sum is the total number of edges assigned to the work-group.
+      const uint32_t total_edges = scan_ends[wgroup_size - 1];
 
       for (uint32_t edge_rank = static_cast<uint32_t>(lid); edge_rank < total_edges; edge_rank += static_cast<uint32_t>(wgroup_size)) {
         const uint32_t slot = workgroupMappedUpperBound(&scan_ends[0], static_cast<uint32_t>(wgroup_size), edge_rank);
