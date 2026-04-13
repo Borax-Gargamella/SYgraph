@@ -52,24 +52,33 @@ Ensure you have the following dependencies:
    ```
 2. Configure and build the project:
    ```bash
-   mkdir build && cd build
-   cmake .. -DCMAKE_CXX_COMPILER_PATH=/path/to/sycl/compiler
-   make install
+   cmake -S . -B build -DCMAKE_CXX_COMPILER=/path/to/sycl/compiler
+   cmake --build build -j
+   cmake --install build
    ```
-This will create the SYgraph cmake package that can be used in other CMake projects.
+This installs the SYgraph CMake package so it can be consumed by other CMake projects.
 
 ### Build Examples
 After cloning the repository you can build the example projects with the following procedure.
 
-2. Set the target architecture (only if using oneAPI compiler).
+1. Configure the project with examples enabled:
    ```bash
-   cmake .. -DCMAKE_CXX_COMPILER_PATH=/path/to/sycl/compiler -DSYGRAPH_BUILD_EXAMPLES=ON -DARCH=target_architecture
+   cmake -S . -B build \
+     -DCMAKE_CXX_COMPILER=/path/to/sycl/compiler \
+     -DSYGRAPH_BUILD_EXAMPLES=ON
    ```
-   The list of available targets is defined [here](https://github.com/intel/llvm/blob/sycl/sycl/doc/UsersManual.md).
+2. If you are using the oneAPI compiler and want AOT compilation, also set `ARCH`:
+   ```bash
+   cmake -S . -B build \
+     -DCMAKE_CXX_COMPILER=/path/to/sycl/compiler \
+     -DSYGRAPH_BUILD_EXAMPLES=ON \
+     -DARCH=target_architecture
+   ```
+   The list of available oneAPI targets is defined [here](https://github.com/intel/llvm/blob/sycl/sycl/doc/UsersManual.md).
 
 3. Build the project:
    ```bash
-   cmake --build . -j
+   cmake --build build -j
    ```
    The build files will be in the `build/bin` folder.
 
@@ -96,16 +105,18 @@ Under the `/datasets` directory, there is a script called `manager.py` that is e
 To see a full list of commands and options, run `$ python manager.py --help`
 
 ## Configuration
-To configure the project, the following list of the available CMake options.
+The following CMake cache variables are currently supported by the build.
 |Option|Type|Default|Description|
 |-|-|-|-|
 |SYGRAPH_BITMAP_SIZE|Integer|32|Bitmap size in bits. It should match the sub-group (i.e., warp, wavefront) size.|
 |SYGRAPH_CU_SIZE|Integer|512|Number of threads (`X`) in a compute-unit of the target architecture.|
-|SYGRAPH_BUILD_EXAMPLES|Boolean|OFF|Builds example algorithms: BFS, SSSP, BC, CC. If it is ON, it is mandatory to specify also the target architecture with `ARCH` variable (e.g., nvidia_gpu_sm_70) if using the oneAPI compiler.|
+|SYGRAPH_BUILD_EXAMPLES|Boolean|OFF|Builds the example executables. When this is `ON`, the example-specific cache variables `GRAPH_LOCATION` and `ARCH` are also available. `ARCH` is optional and is only needed for oneAPI AOT compilation.|
 |SYGRAPH_ENABLE_PROFILING|Boolean|OFF|Enables kernel profiling.|
 |SYGRAPH_ENABLE_PREFETCH|Boolean|OFF|Enable runtime to prefetch shared memory allocation. Turn it OFF for compatibility.|
 |SYGRAPH_BUILD_TESTS|Boolean|OFF|Builds tests.|
-|SYGRAPH_SAMPLE_DATA|Boolean|OFF|Builds also default sparse datasets for testing purposes.|
+|SYGRAPH_DOCS|Boolean|ON|Generates the `doc` target and installs the generated documentation. If Doxygen is not already installed, the build tries to bootstrap a pinned Doxygen binary on Linux x86_64 hosts.|
+|GRAPH_LOCATION|String|device|Example-only option that selects graph placement: `host`, `device`, or `shared`. Available only when `SYGRAPH_BUILD_EXAMPLES=ON`.|
+|ARCH|String|empty|Optional target passed to `-fsycl-targets` for oneAPI AOT compilation in examples and tests (for example `nvptx64-nvidia-cuda` or `spir64`).|
 
 ## Contributing
 We welcome contributions! If you have improvements or bug fixes, please fork the repository and open a pull request against the `develop` branch. Ensure your changes are tested on multiple backends where possible.

@@ -29,12 +29,8 @@ void buildAndDestroyGraphs(sycl::queue& q) {
 } // namespace
 
 int main() {
-#ifndef GENERATE_SAMPLE_DATA
-  return 0;
-#else
   auto q = sygraph::tests::makeQueue();
 
   buildAndDestroyGraphs<sygraph::memory::space::shared>(q);
   buildAndDestroyGraphs<sygraph::memory::space::device>(q);
-#endif
 }

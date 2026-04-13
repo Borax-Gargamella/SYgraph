@@ -11,6 +11,7 @@
 #include <vector>
 
 #include <sycl/sycl.hpp>
+#include <sygraph/io/matrices.hpp>
 #include <sygraph/sygraph.hpp>
 
 namespace sygraph::tests {

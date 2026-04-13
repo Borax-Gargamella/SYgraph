@@ -2,8 +2,9 @@
  * Copyright (c) 2025 University of Salerno
  * SPDX-License-Identifier: Apache-2.0
  */
-#ifdef GENERATE_SAMPLE_DATA
-#include <iostream>
+#pragma once
+
+#include <string_view>
 
 namespace sygraph {
 namespace io {
@@ -43,4 +44,3 @@ constexpr std::string_view two_cc = "6\n"
 } // namespace storage
 } // namespace io
 } // namespace sygraph
-#endif

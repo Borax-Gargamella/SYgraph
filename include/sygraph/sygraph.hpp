@@ -18,9 +18,6 @@
 #include <sygraph/graph/properties.hpp>
 
 // Include IO
-#ifdef GENERATE_SAMPLE_DATA
-#include <sygraph/io/matrices.hpp>
-#endif
 #include <sygraph/io/read_coo.hpp>
 #include <sygraph/io/read_csr.hpp>
 
