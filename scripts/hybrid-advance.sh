@@ -35,7 +35,6 @@ if [ ! -d $datasets_path ]; then
   exit 1
 fi
 
-benchs=("bfs") 
 graphs=("hollywood-2009" "soc-orkut" "soc-LiveJournal1" "roadNet-CA" "kron_g500-logn21" "indochina-2004" "road_usa" "soc-twitter-2010")
 betas=(1 10 100 1000 10000 100000 1000000)
 alphas=(1 5 10 15 20 25 30)
@@ -52,24 +51,23 @@ declare -A SOURCES=(
 )
 
 function benchmark {
-  bench=$1
-  graph=$2
-  alpha=$3
-  beta=$4
+  graph=$1
+  alpha=$2
+  beta=$3
   graph_path=$datasets_path/$graph/$graph.bin
 
   sources=(${SOURCES[$graph]})
 
-  mkdir -p $SCRIPT_DIR/logs/$bench
+  mkdir -p $SCRIPT_DIR/logs/bfs-hybrid
 
-  log_file=$SCRIPT_DIR/logs/$bench/${graph}_alpha${alpha}_beta${beta}.log
-  err_file=$SCRIPT_DIR/logs/$bench/${graph}_alpha${alpha}_beta${beta}.err
+  log_file=$SCRIPT_DIR/logs/bfs-hybrid/${graph}_alpha${alpha}_beta${beta}.log
+  err_file=$SCRIPT_DIR/logs/bfs-hybrid/${graph}_alpha${alpha}_beta${beta}.err
 
   echo Running $bench on $graph with alpha=$alpha beta=$beta
   for source in "${sources[@]}"
   do
     echo -n '#'
-    $SCRIPT_DIR/build/bin/$bench \
+    $SCRIPT_DIR/build/bin/bfs \
       -b $graph_path \
       -s $source \
       -V \
@@ -83,11 +81,11 @@ function benchmark {
 
 for graph in "${graphs[@]}"
 do
-  for alpha in $(alphas[@])
+  for alpha in ${alphas[@]}
   do
     for beta in "${betas[@]}"
     do
-      benchmark bfs $graph $alpha $beta
+      benchmark $graph $alpha $beta
     done
   done
 done
