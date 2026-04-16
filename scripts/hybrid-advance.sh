@@ -60,8 +60,8 @@ function benchmark {
 
   mkdir -p $SCRIPT_DIR/logs/bfs-hybrid
 
-  log_file=$SCRIPT_DIR/logs/bfs-hybrid/${graph}_alpha${alpha}_beta${beta}.log
-  err_file=$SCRIPT_DIR/logs/bfs-hybrid/${graph}_alpha${alpha}_beta${beta}.err
+  log_file=$SCRIPT_DIR/logs/bfs-hybrid/${graph}.log
+  err_file=$SCRIPT_DIR/logs/bfs-hybrid/${graph}.err
 
   echo Running $bench on $graph with alpha=$alpha beta=$beta
   for source in "${sources[@]}"
