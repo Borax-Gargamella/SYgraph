@@ -35,19 +35,16 @@ if [ ! -d $datasets_path ]; then
   exit 1
 fi
 
-graphs=("hollywood-2009" "soc-orkut" "soc-LiveJournal1" "roadNet-CA" "kron_g500-logn21" "indochina-2004" "road_usa" "soc-twitter-2010")
-betas=(1 10 100 1000 10000 100000 1000000)
-alphas=(1 5 10 15 20 25 30)
+graphs=("hollywood-2009" "soc-orkut" "soc-LiveJournal1" "kron_g500-logn21" "soc-twitter-2010")
+betas=(1 10 100 1000 10000 100000 1000000 10000000 100000000)
+alphas=(1 5 10 15 20 25 30 35 40)
 
 declare -A SOURCES=(
-  ["roadNet-CA"]="63595"
-  ["hollywood-2009"]="121253"
-  ["soc-orkut"]="698989"
-  ["soc-LiveJournal1"]="3872779"
-  ["kron_g500-logn21"]="1448412" 
-  ["indochina-2004"]="3984130"
-  ["road_usa"]="15461103"
-  ["soc-twitter-2010"]="447625"
+  ["hollywood-2009"]="320853 927132 517242 884131 247188 42013 214421 1002581 258499 59764"
+  ["soc-orkut"]="2873415 2219636 302210 657473 2851808 168592 2252915 2107278 301658 230095"
+  ["soc-LiveJournal1"]="2593191 4575639 107249 2513291 2473871 4203909 1107036 4688748 751713 443344"
+  ["kron_g500-logn21"]="687052 989381 593082 403988 2062447 846121 624295 237579 639491 1685862"
+  ["soc-twitter-2010"]="1190836 1051365 1694577 586027 1368976 1548584 952578 251119 306387 1740693"
 )
 
 function benchmark {
