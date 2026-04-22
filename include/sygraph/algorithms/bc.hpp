@@ -53,7 +53,7 @@ struct BCInstance {
     queue.wait_and_throw();
 
     queue.fill(&sigmas[source], static_cast<weight_t>(1), 1);
-    queue.fill(&labels[source], 0, 1);
+    queue.fill(&labels[source], static_cast<vertex_t>(0), 1);
     queue.wait_and_throw();
   }
 
