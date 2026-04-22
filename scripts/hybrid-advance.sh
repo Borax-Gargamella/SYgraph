@@ -61,7 +61,7 @@ function benchmark {
   log_file=$SCRIPT_DIR/logs/bfs-hybrid/${graph}.log
   err_file=$SCRIPT_DIR/logs/bfs-hybrid/${graph}.err
 
-  echo Running $bench on $graph with alpha=$alpha beta=$beta
+  echo Running bfs-hybrid on $graph with alpha=$alpha beta=$beta
   for source in "${sources[@]}"
   do
     echo -n '#'
