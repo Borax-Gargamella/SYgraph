@@ -77,7 +77,8 @@ struct BFSInstance {
     size_t visited_nodes = 0;
     auto& queue = G.getQueue();
     std::vector<edge_t> dists (vertex_count);
-    queue.copy(dists.data(), distances, vertex_count).wait();
+    queue.copy(distances, dists.data(), vertex_count).wait();
+
     for (size_t i = 0; i < G.getVertexCount(); i++) {
       if (dists[i] != static_cast<edge_t>(vertex_count + 1)) { visited_nodes++; }
     }
@@ -89,7 +90,7 @@ struct BFSInstance {
     size_t visited_edges = 0;
     auto& queue = G.getQueue();
     std::vector<edge_t> dists (vertex_count); 
-    queue.copy(dists.data(), distances, vertex_count).wait();
+    queue.copy(distances, dists.data(), vertex_count).wait();
     
     for (size_t i = 0; i < G.getVertexCount(); i++) {
       if (dists[i] != static_cast<edge_t>(vertex_count + 1)) { visited_edges += G.getDegree(i); }

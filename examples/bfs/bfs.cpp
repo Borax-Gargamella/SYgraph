@@ -27,7 +27,7 @@ bool validate(const GraphT& graph, BfsT& bfs, uint source) {
   auto* row_offsets = graph.getRowOffsets();
   auto* col_indices = graph.getColumnIndices();
 
-  auto host_distances = bfs.getDistances();
+  auto device_dsts = bfs.getDistances();
 
   size_t iter = 0;
   size_t mismatches = 0;
@@ -42,7 +42,7 @@ bool validate(const GraphT& graph, BfsT& bfs, uint source) {
         auto neighbor = col_indices[j];
         if (distances[neighbor] == graph.getVertexCount() + 1) {
           distances[neighbor] = distances[vertex] + 1;
-          if (distances[neighbor] != host_distances[neighbor]) { mismatches++; }
+          if (distances[neighbor] != device_dsts[neighbor]) { mismatches++; }
           out_frontier.push_back(neighbor);
         }
       }
