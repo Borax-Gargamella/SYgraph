@@ -178,6 +178,8 @@ int main(int argc, char** argv) {
   }
 
   printProfilingOutput(opts);
+  // Profiling events must be released before queue/runtime teardown at exit.
+  clearProfilingOutput();
   std::cout << "Total Host Time: " << std::chrono::duration_cast<std::chrono::milliseconds>(end_timer - start_timer).count() << " ms" << std::endl;
   return 0;
 }
