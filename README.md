@@ -114,7 +114,7 @@ The following CMake cache variables are currently supported by the build.
 |SYGRAPH_ENABLE_PROFILING|Boolean|OFF|Enables kernel profiling.|
 |SYGRAPH_ENABLE_PREFETCH|Boolean|OFF|Enable runtime to prefetch shared memory allocation. Turn it OFF for compatibility.|
 |SYGRAPH_BUILD_TESTS|Boolean|OFF|Builds tests.|
-|SYGRAPH_DOCS|Boolean|ON|Generates the `doc` target and installs the generated documentation. If Doxygen is not already installed, the build tries to bootstrap a pinned Doxygen binary on Linux x86_64 hosts.|
+|SYGRAPH_DOCS|Boolean|OFF|Generates the `doc` target and installs the generated documentation. If Doxygen is not already installed, the build tries to bootstrap a pinned Doxygen binary on Linux x86_64 hosts.|
 |GRAPH_LOCATION|String|device|Example-only option that selects graph placement: `host`, `device`, or `shared`. Available only when `SYGRAPH_BUILD_EXAMPLES=ON`.|
 |ARCH|String|empty|Optional target passed to `-fsycl-targets` for oneAPI AOT compilation in examples and tests (for example `nvptx64-nvidia-cuda` or `spir64`).|
 
