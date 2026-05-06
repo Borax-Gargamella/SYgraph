@@ -81,7 +81,6 @@ struct PRInstance {
 };
 } // namespace detail
 
-
 /**
  * @class PR
  * @brief A class template for computing PageRank on a graph.
@@ -168,19 +167,17 @@ public:
     // The lambda returns false because no frontier output is produced.
     // ---------------------------------------------------------------------
     {
-      auto e = sygraph::operators::advance::vertices<load_balance_t::workitem_mapped>(
-          G, [=](auto src, auto dst, auto edge, auto weight) -> bool {
-            (void)dst;
-            (void)edge;
-            (void)weight;
-            sygraph::sync::atomicFetchAdd(out_deg + src, 1.0f);
-            return false;
-          });
-      e.waitAndThrow();
+  auto e = queue.submit([&](sycl::handler& cgh) {
+    cgh.parallel_for<class PROutDegreeKernel>(sycl::range<1>(N), [=](sycl::id<1> idx) {
+      size_t v = idx[0];
+      out_deg[v] = static_cast<float>(G.getDegree(v));
+    });
+  });
+  e.wait();
 #ifdef ENABLE_PROFILING
-      sygraph::Profiler::addEvent(e, "PR::OutDegree");
+  sygraph::Profiler::addEvent(e, "PR::OutDegree");
 #endif
-    }
+}
 
     // ---------------------------------------------------------------------
     // Step 2: power iteration.
