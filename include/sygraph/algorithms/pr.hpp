@@ -168,7 +168,7 @@ public:
     // The lambda returns false because no frontier output is produced.
     // ---------------------------------------------------------------------
     {
-      auto e = sygraph::operators::advance::vertices<load_balance_t::workgroup_mapped>(
+      auto e = sygraph::operators::advance::vertices<load_balance_t::workitem_mapped>(
           G, [=](auto src, auto dst, auto edge, auto weight) -> bool {
             (void)dst;
             (void)edge;
