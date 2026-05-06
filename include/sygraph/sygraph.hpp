@@ -38,6 +38,7 @@
 #include <sygraph/algorithms/cc.hpp>
 #include <sygraph/algorithms/sssp.hpp>
 #include <sygraph/algorithms/tc.hpp>
+#include <sygraph/algorithms/pagerank.hpp>
 
 // Include sync
 #include <sygraph/sync/atomics.hpp>

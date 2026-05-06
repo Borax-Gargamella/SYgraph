@@ -27,9 +27,9 @@ add_executable(sssp sssp/sssp.cpp)
 add_executable(tc tc/tc.cpp)
 add_executable(bc bc/bc.cpp)
 add_executable(cc cc/cc.cpp)
-add_executable(pagerank_cpu pagerank/pagerank_cpu.cpp)
-add_executable(pagerank_gpu pagerank/pagerank_gpu.cpp)
-add_executable(pagerank_compare pagerank/pagerank_compare.cpp)
+add_executable(pagerank_cpu pr/pagerank_cpu.cpp)
+add_executable(pagerank_gpu pr/pagerank_gpu.cpp)
+add_executable(pagerank_compare pr/pagerank_compare.cpp)
 
 set_property(DIRECTORY ${CMAKE_SOURCE_DIR}/ PROPERTY CMAKE_RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin)
 
