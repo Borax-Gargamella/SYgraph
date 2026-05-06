@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 #include "../include/utils.hpp"
-#include <sygraph/algorithms/pagerank.hpp>
+#include <sygraph/algorithms/pr.hpp>
 #include <CLI/CLI.hpp>
 #include <algorithm>
 #include <chrono>
