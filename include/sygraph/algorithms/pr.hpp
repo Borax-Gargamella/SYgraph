@@ -163,21 +163,25 @@ public:
     // ---------------------------------------------------------------------
     // Step 1: pre-compute out-degree for every vertex.
     //
-    // We walk every edge (src -> dst) once and atomically increment out_deg[src].
-    // The lambda returns false because no frontier output is produced.
+    // We read row_offsets directly from the CSR and compute degree as
+    // row_offsets[v+1] - row_offsets[v]. This avoids capturing the non-
+    // copyable graph object inside the SYCL kernel.
     // ---------------------------------------------------------------------
     {
-  auto e = queue.submit([&](sycl::handler& cgh) {
-    cgh.parallel_for<class PROutDegreeKernel>(sycl::range<1>(N), [=](sycl::id<1> idx) {
-      size_t v = idx[0];
-      out_deg[v] = static_cast<float>(G.getDegree(v));
-    });
-  });
-  e.wait();
+      auto* row_offsets = G.getRowOffsets();
+      auto e = queue.submit([&](sycl::handler& cgh) {
+        cgh.parallel_for<class PROutDegreeKernel>(
+            sycl::range<1>(N),
+            [=](sycl::id<1> idx) {
+              size_t v = idx[0];
+              out_deg[v] = static_cast<float>(row_offsets[v + 1] - row_offsets[v]);
+            });
+      });
+      e.wait();
 #ifdef ENABLE_PROFILING
-  sygraph::Profiler::addEvent(e, "PR::OutDegree");
+      sygraph::Profiler::addEvent(e, "PR::OutDegree");
 #endif
-}
+    }
 
     // ---------------------------------------------------------------------
     // Step 2: power iteration.
@@ -211,7 +215,7 @@ public:
       {
         auto e = queue.submit([&](sycl::handler& cgh) {
           auto red = sycl::reduction(delta_buf, cgh, sycl::plus<float>());
-          cgh.parallel_for(sycl::range<1>(N), red, [=](sycl::id<1> idx, auto& sum) {
+          cgh.parallel_for<class PRDampingKernel>(sycl::range<1>(N), red, [=](sycl::id<1> idx, auto& sum) {
             size_t v = idx[0];
             float old_v = rank[v];
             float new_v = base_score + damping * new_rank[v];
