@@ -245,7 +245,8 @@ public:
 
       // (d) Update rank and compute L-infinity convergence delta:
       //     delta = max_v |new_rank[v] - rank[v]|
-      sycl::buffer<float, 1> delta_buf(sycl::range<1>(1));
+      float zero = 0.0f;
+      sycl::buffer<float, 1> delta_buf(&zero, sycl::range<1>(1));
       {
         auto e = queue.submit([&](sycl::handler& cgh) {
           auto red = sycl::reduction(delta_buf, cgh, sycl::maximum<float>());
