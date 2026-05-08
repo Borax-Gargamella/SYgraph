@@ -19,6 +19,10 @@
 /**
  * @brief Pure-CPU power-iteration PageRank used as a reference implementation.
  *
+ * Matches the GPU formulation exactly:
+ *   - dangling-node mass is redistributed uniformly at every iteration,
+ *   - convergence uses L-infinity norm (max absolute change).
+ *
  * Re-defined inline (rather than shared via a header) to keep this driver
  * self-contained, mirroring the style of the other example drivers in the repo.
  */
@@ -29,35 +33,49 @@ int pagerank_cpu(const GraphT& graph, std::vector<float>& rank, float damping, f
   auto* col_indices = graph.getColumnIndices();
 
   const size_t N = graph.getVertexCount();
-  const float base_score = (1.0f - damping) / static_cast<float>(N);
 
   rank.assign(N, 1.0f / static_cast<float>(N));
   std::vector<float> new_rank(N, 0.0f);
-
   std::vector<float> out_deg(N, 0.0f);
-  for (size_t v = 0; v < N; ++v) { out_deg[v] = static_cast<float>(row_offsets[v + 1] - row_offsets[v]); }
+
+  for (size_t v = 0; v < N; ++v) {
+    out_deg[v] = static_cast<float>(row_offsets[v + 1] - row_offsets[v]);
+  }
 
   int iter = 0;
   for (; iter < max_iter; ++iter) {
-    std::fill(new_rank.begin(), new_rank.end(), 0.0f);
 
+    // (a) Compute dangling-node mass
+    float dsum = 0.0f;
+    for (size_t v = 0; v < N; ++v) {
+      if (out_deg[v] == 0.0f) { dsum += damping * rank[v]; }
+    }
+
+    // (b) Fill accumulator with teleportation + dangling base score
+    float base = (1.0f - damping + dsum) / static_cast<float>(N);
+    std::fill(new_rank.begin(), new_rank.end(), base);
+
+    // (c) Push edge contributions
     for (size_t src = 0; src < N; ++src) {
       float od = out_deg[src];
       if (od <= 0.0f) { continue; }
-      float contrib = rank[src] / od;
+      float contrib = damping * rank[src] / od;
       vertex_t start = row_offsets[src];
-      vertex_t end = row_offsets[src + 1];
-      for (vertex_t off = start; off < end; ++off) { new_rank[col_indices[off]] += contrib; }
+      vertex_t end   = row_offsets[src + 1];
+      for (vertex_t off = start; off < end; ++off) {
+        new_rank[col_indices[off]] += contrib;
+      }
     }
 
+    // (d) Update rank and compute L-infinity delta
     float delta = 0.0f;
     for (size_t v = 0; v < N; ++v) {
-      float old_v = rank[v];
-      float updated = base_score + damping * new_rank[v];
-      rank[v] = updated;
-      delta += std::abs(updated - old_v);
+      float diff = std::abs(new_rank[v] - rank[v]);
+      if (diff > delta) { delta = diff; }
+      rank[v] = new_rank[v];
     }
 
+    // (e) Convergence check (L-infinity)
     if (delta < epsilon) {
       ++iter;
       break;
@@ -68,10 +86,11 @@ int pagerank_cpu(const GraphT& graph, std::vector<float>& rank, float damping, f
 }
 
 /**
- * @brief Validates the GPU PageRank result against a CPU power-iteration reference.
+ * @brief Validates the GPU PageRank result against the CPU reference.
  *
- * Allows for a small absolute tolerance because the GPU implementation
- * accumulates floating-point contributions in non-deterministic order.
+ * Both implementations use the same formulation (dangling redistribution +
+ * L-infinity convergence), so results should agree within floating-point
+ * tolerance due to non-deterministic atomic accumulation order on the GPU.
  */
 template<typename GraphT, typename PRT>
 bool validate(const GraphT& graph, PRT& pr, float damping, float epsilon, int max_iter) {
@@ -103,7 +122,9 @@ void printTopK(const GraphT& graph, PRT& pr, int top_k) {
   std::cout << std::left;
   std::cout << std::setw(10) << "Vertex" << std::setw(20) << "Rank" << std::endl;
   std::cout << std::fixed << std::setprecision(8);
-  for (size_t i = 0; i < k; ++i) { std::cout << std::setw(10) << indices[i] << std::setw(20) << ranks[indices[i]] << std::endl; }
+  for (size_t i = 0; i < k; ++i) {
+    std::cout << std::setw(10) << indices[i] << std::setw(20) << ranks[indices[i]] << std::endl;
+  }
 }
 
 int main(int argc, char** argv) {
@@ -112,15 +133,15 @@ int main(int argc, char** argv) {
   CLI::App app{"SYgraph example - PageRank (GPU)"};
   auto* source_option = configureBaseCLI(app, opts);
 
-  float damping = 0.85f;
-  float epsilon = 1e-6f;
-  int max_iter = 100;
-  int top_k = 10;
+  float damping  = 0.85f;
+  float epsilon  = 1e-6f;
+  int   max_iter = 100;
+  int   top_k    = 10;
 
-  app.add_option("--damping", damping, "Damping factor for PageRank (default 0.85)")->check(CLI::Range(0.0f, 1.0f));
-  app.add_option("--epsilon", epsilon, "Convergence threshold (L1) for PageRank (default 1e-6)")->check(CLI::PositiveNumber);
+  app.add_option("--damping",  damping,  "Damping factor for PageRank (default 0.85)")->check(CLI::Range(0.0f, 1.0f));
+  app.add_option("--epsilon",  epsilon,  "Convergence threshold (L-infinity) for PageRank (default 1e-6)")->check(CLI::PositiveNumber);
   app.add_option("--max-iter", max_iter, "Maximum number of PageRank iterations (default 100)")->check(CLI::PositiveNumber);
-  app.add_option("--top-k", top_k, "Number of top-ranked vertices to print (default 10)")->check(CLI::PositiveNumber);
+  app.add_option("--top-k",    top_k,    "Number of top-ranked vertices to print (default 10)")->check(CLI::PositiveNumber);
 
   CLI11_PARSE(app, argc, argv);
   finalizeGraphOptions(opts, source_option);
