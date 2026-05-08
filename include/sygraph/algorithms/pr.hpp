@@ -139,7 +139,7 @@ public:
    *
    * @param damping  Damping factor (typically 0.85).
    * @param epsilon  Convergence threshold on the L1 norm of consecutive rank vectors.
-   * @param max_iter Maximum number of iterations.
+   * @param max_iter Maximum number of iterations 100.
    *
    * @throws std::runtime_error if the PR instance is not initialized.
    */
@@ -207,6 +207,7 @@ public:
         e.waitAndThrow();
 #ifdef ENABLE_PROFILING
         sygraph::Profiler::addEvent(e, "PR::Push");
+        sygraph::Profiler::addVisitedEdges(G.getEdgeCount());
 #endif
       }
 
