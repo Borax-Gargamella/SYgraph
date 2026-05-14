@@ -41,7 +41,7 @@ struct BCInstance {
     sycl::queue& queue = G.getQueue();
     size_t size = G.getVertexCount();
 
-    labels = sygraph::memory::detail::memoryAlloc<vertex_t, memory::space::shared>(size, queue);
+    labels = sygraph::memory::detail::memoryAlloc<vertex_t, memory::space::device>(size, queue);
     deltas = sygraph::memory::detail::memoryAlloc<weight_t, memory::space::device>(size, queue);
     sigmas = sygraph::memory::detail::memoryAlloc<weight_t, memory::space::device>(size, queue);
     bc_values = sygraph::memory::detail::memoryAlloc<weight_t, memory::space::device>(size, queue);
@@ -53,7 +53,7 @@ struct BCInstance {
     queue.wait_and_throw();
 
     queue.fill(&sigmas[source], static_cast<weight_t>(1), 1);
-    labels[source] = 0;
+    queue.fill(&labels[source], static_cast<vertex_t>(0), 1);
     queue.wait_and_throw();
   }
 

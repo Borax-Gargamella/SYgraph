@@ -16,8 +16,15 @@ enum class load_balancer {
 
 enum class direction {
   push,
-  pull,
+  pull,      // pull with short-circuit: stops after the first valid source edge per vertex
+  pull_all,  // pull without short-circuit: processes all source edges per vertex
 };
+
+template<direction D>
+constexpr bool is_pull() { return D == direction::pull || D == direction::pull_all; }
+
+template<direction D>
+constexpr bool is_short_circuit() { return D == direction::pull; }
 } // namespace operators
 
 namespace frontier::size {

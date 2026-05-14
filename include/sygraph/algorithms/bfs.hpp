@@ -62,20 +62,25 @@ struct BFSInstance {
     size_t size = G.getVertexCount();
 
     // Initialize distances
-    distances = memory::detail::memoryAlloc<edge_t, memory::space::shared>(size, queue);
-    queue.fill(distances, static_cast<edge_t>(size + 1), size).wait();
-    distances[source] = static_cast<edge_t>(0); // Distance from source to itself is 0
-
+    distances = memory::detail::memoryAlloc<edge_t, memory::space::device>(size, queue);
+    parents = memory::detail::memoryAlloc<vertex_t, memory::space::device>(size, queue);
+    queue.fill(distances, static_cast<edge_t>(size + 1), size).wait_and_throw();
+    queue.fill(&distances[source], static_cast<edge_t>(0), 1);
     // Initialize parents
-    parents = memory::detail::memoryAlloc<vertex_t, memory::space::shared>(size, queue);
-    queue.fill(parents, static_cast<vertex_t>(-1), size).wait();
+    queue.fill(parents, static_cast<vertex_t>(-1), size);
+    queue.wait_and_throw();
+
   }
 
   size_t getVisitedVertices() const {
     size_t vertex_count = G.getVertexCount();
     size_t visited_nodes = 0;
+    auto& queue = G.getQueue();
+    std::vector<edge_t> dists (vertex_count);
+    queue.copy(distances, dists.data(), vertex_count).wait();
+
     for (size_t i = 0; i < G.getVertexCount(); i++) {
-      if (distances[i] != static_cast<edge_t>(vertex_count + 1)) { visited_nodes++; }
+      if (dists[i] != static_cast<edge_t>(vertex_count + 1)) { visited_nodes++; }
     }
     return visited_nodes;
   }
@@ -83,8 +88,12 @@ struct BFSInstance {
   size_t getVisitedEdges() const {
     size_t vertex_count = G.getVertexCount();
     size_t visited_edges = 0;
+    auto& queue = G.getQueue();
+    std::vector<edge_t> dists (vertex_count); 
+    queue.copy(distances, dists.data(), vertex_count).wait();
+    
     for (size_t i = 0; i < G.getVertexCount(); i++) {
-      if (distances[i] != static_cast<edge_t>(vertex_count + 1)) { visited_edges += G.getDegree(i); }
+      if (dists[i] != static_cast<edge_t>(vertex_count + 1)) { visited_edges += G.getDegree(i); }
     }
     return visited_edges;
   }

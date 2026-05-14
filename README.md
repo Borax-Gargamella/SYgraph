@@ -104,6 +104,41 @@ Under the `/datasets` directory, there is a script called `manager.py` that is e
 
 To see a full list of commands and options, run `$ python manager.py --help`
 
+### Advance: direction parameter
+
+The `Advance` primitive accepts a `Direction` template parameter of type `sygraph::operators::direction` that controls how edges are traversed and whether processing stops early once a vertex is satisfied:
+
+| Value | Traversal | Short-circuit |
+|-------|-----------|---------------|
+| `direction::push` | Forward graph — for each active vertex, visit its out-neighbours | No |
+| `direction::pull` | Inverse graph — for each vertex, scan its in-neighbours and **stop after the first valid source edge** | Yes |
+| `direction::pull_all` | Inverse graph — for each vertex, scan **all** in-neighbours regardless of how many succeed | No |
+
+`direction::pull` is the right choice when a single contributing source is enough (e.g., BFS, SSSP relaxation). Use `direction::pull_all` when the functor must be applied to every valid source edge (e.g., aggregation kernels, PageRank-style accumulation).
+
+```cpp
+// Push: spread active vertices to their neighbours
+sygraph::operators::advance::frontier<
+    sygraph::operators::direction::push,
+    sygraph::operators::load_balancer::workgroup_mapped,
+    sygraph::frontier::frontier_view::vertex,
+    sygraph::frontier::frontier_view::vertex>(graph, in, out, functor);
+
+// Pull with short-circuit: stop after the first valid source per vertex
+sygraph::operators::advance::frontier<
+    sygraph::operators::direction::pull,
+    sygraph::operators::load_balancer::workgroup_mapped,
+    sygraph::frontier::frontier_view::vertex,
+    sygraph::frontier::frontier_view::vertex>(graph, in, out, functor);
+
+// Pull without short-circuit: process every valid source edge per vertex
+sygraph::operators::advance::frontier<
+    sygraph::operators::direction::pull_all,
+    sygraph::operators::load_balancer::workgroup_mapped,
+    sygraph::frontier::frontier_view::vertex,
+    sygraph::frontier::frontier_view::vertex>(graph, in, out, functor);
+```
+
 ## Configuration
 The following CMake cache variables are currently supported by the build.
 |Option|Type|Default|Description|
@@ -114,7 +149,7 @@ The following CMake cache variables are currently supported by the build.
 |SYGRAPH_ENABLE_PROFILING|Boolean|OFF|Enables kernel profiling.|
 |SYGRAPH_ENABLE_PREFETCH|Boolean|OFF|Enable runtime to prefetch shared memory allocation. Turn it OFF for compatibility.|
 |SYGRAPH_BUILD_TESTS|Boolean|OFF|Builds tests.|
-|SYGRAPH_DOCS|Boolean|ON|Generates the `doc` target and installs the generated documentation. If Doxygen is not already installed, the build tries to bootstrap a pinned Doxygen binary on Linux x86_64 hosts.|
+|SYGRAPH_DOCS|Boolean|OFF|Generates the `doc` target and installs the generated documentation. If Doxygen is not already installed, the build tries to bootstrap a pinned Doxygen binary on Linux x86_64 hosts.|
 |GRAPH_LOCATION|String|device|Example-only option that selects graph placement: `host`, `device`, or `shared`. Available only when `SYGRAPH_BUILD_EXAMPLES=ON`.|
 |ARCH|String|empty|Optional target passed to `-fsycl-targets` for oneAPI AOT compilation in examples and tests (for example `nvptx64-nvidia-cuda` or `spir64`).|
 

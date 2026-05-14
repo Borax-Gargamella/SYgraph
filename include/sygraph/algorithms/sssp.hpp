@@ -7,7 +7,7 @@
 #include <sycl/sycl.hpp>
 
 #include <memory>
-
+#include <vector>
 #include <sygraph/frontier/frontier.hpp>
 #include <sygraph/graph/graph.hpp>
 #include <sygraph/operators/advance/advance.hpp>
@@ -39,22 +39,26 @@ struct SSSPInstance {
     sycl::queue& queue = G.getQueue();
     size_t size = G.getVertexCount();
 
-    distances = memory::detail::memoryAlloc<weight_t, memory::space::shared>(size, queue);
+    distances = memory::detail::memoryAlloc<weight_t, memory::space::device>(size, queue);
     queue.fill(distances, static_cast<weight_t>(size + 1), size).wait();
-    queue.fill(distances + source, static_cast<weight_t>(0), 1).wait();
+    queue.fill(&distances[source], static_cast<weight_t>(0), 1).wait();
 
-    parents = memory::detail::memoryAlloc<vertex_t, memory::space::shared>(size, queue);
+    parents = memory::detail::memoryAlloc<vertex_t, memory::space::device>(size, queue);
     queue.fill(parents, static_cast<vertex_t>(-1), size).wait();
 
-    visited = memory::detail::memoryAlloc<int, memory::space::shared>(size, queue);
+    visited = memory::detail::memoryAlloc<int, memory::space::device>(size, queue);
     queue.fill(visited, -1, size).wait();
   }
 
   size_t getVisitedVertices() const {
     size_t vertex_count = G.getVertexCount();
     size_t visited_nodes = 0;
+    auto& queue = G.getQueue();
+    std::vector<edge_t> dists (vertex_count);
+    queue.copy(distances, dists.data(), vertex_count).wait();
+
     for (size_t i = 0; i < G.getVertexCount(); i++) {
-      if (distances[i] != static_cast<edge_t>(vertex_count + 1)) { visited_nodes++; }
+      if (dists[i] != static_cast<edge_t>(vertex_count + 1)) { visited_nodes++; }
     }
     return visited_nodes;
   }
@@ -62,8 +66,12 @@ struct SSSPInstance {
   size_t getVisitedEdges() const {
     size_t vertex_count = G.getVertexCount();
     size_t visited_edges = 0;
+    auto& queue = G.getQueue();
+    std::vector<edge_t> dists (vertex_count);
+    queue.copy(distances, dists.data(), vertex_count).wait();
+
     for (size_t i = 0; i < G.getVertexCount(); i++) {
-      if (distances[i] != static_cast<edge_t>(vertex_count + 1)) { visited_edges += G.getDegree(i); }
+      if (dists[i] != static_cast<edge_t>(vertex_count + 1)) { visited_edges += G.getDegree(i); }
     }
     return visited_edges;
   }
