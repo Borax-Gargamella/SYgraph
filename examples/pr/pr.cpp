@@ -25,6 +25,12 @@
  *
  * Re-defined inline (rather than shared via a header) to keep this driver
  * self-contained, mirroring the style of the other example drivers in the repo.
+ *
+ * @note Uses getRowOffsets() and getColumnIndices() which, with
+ *       GRAPH_LOCATION=device, return pointers to the host-side CSR copy
+ *       (_csr member) - safe to read from the CPU. This is the correct
+ *       behaviour for a CPU reference implementation regardless of the
+ *       graph memory location chosen for the GPU run.
  */
 template<typename GraphT>
 int pagerank_cpu(const GraphT& graph, std::vector<float>& rank, float damping, float epsilon, int max_iter) {
@@ -91,6 +97,10 @@ int pagerank_cpu(const GraphT& graph, std::vector<float>& rank, float damping, f
  * Both implementations use the same formulation (dangling redistribution +
  * L-infinity convergence), so results should agree within floating-point
  * tolerance due to non-deterministic atomic accumulation order on the GPU.
+ *
+ * Validation works correctly with all GRAPH_LOCATION values (host, device,
+ * shared) because pagerank_cpu() reads from the host-side CSR copy, which
+ * is always present in CPU RAM regardless of where the GPU graph is stored.
  */
 template<typename GraphT, typename PRT>
 bool validate(const GraphT& graph, PRT& pr, float damping, float epsilon, int max_iter) {
@@ -102,13 +112,22 @@ bool validate(const GraphT& graph, PRT& pr, float damping, float epsilon, int ma
     float got = pr.getRank(i);
     float expected = reference_rank[i];
     if (std::abs(expected - got) > tolerance) {
-      std::cerr << "Mismatch at vertex " << i << " | Expected: " << expected << " | Got: " << got << std::endl;
+      std::cerr << "Mismatch at vertex " << i
+                << " | Expected: " << expected
+                << " | Got: "      << got << std::endl;
       return false;
     }
   }
   return true;
 }
 
+/**
+ * @brief Prints the top-k vertices by PageRank value.
+ *
+ * @param graph  The graph (used only to get vertex count).
+ * @param pr     The PR instance from which ranks are read.
+ * @param top_k  Number of top-ranked vertices to print.
+ */
 template<typename GraphT, typename PRT>
 void printTopK(const GraphT& graph, PRT& pr, int top_k) {
   size_t N = graph.getVertexCount();
@@ -117,7 +136,8 @@ void printTopK(const GraphT& graph, PRT& pr, int top_k) {
   std::iota(indices.begin(), indices.end(), static_cast<size_t>(0));
 
   size_t k = std::min(static_cast<size_t>(top_k), N);
-  std::partial_sort(indices.begin(), indices.begin() + k, indices.end(), [&](size_t a, size_t b) { return ranks[a] > ranks[b]; });
+  std::partial_sort(indices.begin(), indices.begin() + k, indices.end(),
+                    [&](size_t a, size_t b) { return ranks[a] > ranks[b]; });
 
   std::cout << std::left;
   std::cout << std::setw(10) << "Vertex" << std::setw(20) << "Rank" << std::endl;
@@ -165,7 +185,18 @@ int main(int argc, char** argv) {
   sygraph::algorithms::PR pr{G};
   pr.init();
 
-  std::cout << "[*] Running PageRank on GPU (damping=" << damping << ", epsilon=" << epsilon << ", max_iter=" << max_iter << ")" << std::endl;
+#ifdef PR_PULL
+  constexpr const char* advance_mode = "pull";
+#else
+  constexpr const char* advance_mode = "push";
+#endif
+
+  std::cout << "[*] Running PageRank on GPU"
+            << " (damping=" << damping
+            << ", epsilon=" << epsilon
+            << ", max_iter=" << max_iter
+            << ", advance=" << advance_mode
+            << ")" << std::endl;
 
   auto start_timer = std::chrono::high_resolution_clock::now();
   pr.run(damping, epsilon, max_iter);
@@ -183,13 +214,18 @@ int main(int argc, char** argv) {
     }
     std::cout << "] | ";
     auto validation_end = std::chrono::high_resolution_clock::now();
-    std::cout << "Validation Time: " << std::chrono::duration_cast<std::chrono::milliseconds>(validation_end - validation_start).count() << " ms"
-              << std::endl;
+    std::cout << "Validation Time: "
+              << std::chrono::duration_cast<std::chrono::milliseconds>(
+                     validation_end - validation_start).count()
+              << " ms" << std::endl;
   }
 
   if (opts.print_output) { printTopK(G, pr, top_k); }
 
   printProfilingOutput(opts);
-  std::cout << "Total Host Time: " << std::chrono::duration_cast<std::chrono::milliseconds>(end_timer - start_timer).count() << " ms" << std::endl;
+  std::cout << "Total Host Time: "
+            << std::chrono::duration_cast<std::chrono::milliseconds>(
+                   end_timer - start_timer).count()
+            << " ms" << std::endl;
   return 0;
 }
