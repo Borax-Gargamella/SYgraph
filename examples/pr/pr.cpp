@@ -107,9 +107,12 @@ bool validate(const GraphT& graph, PRT& pr, float damping, float epsilon, int ma
   std::vector<float> reference_rank;
   pagerank_cpu(graph, reference_rank, damping, epsilon, max_iter);
 
+  // Copia tutti i rank in una sola operazione invece di N queue.copy
+  std::vector<float> gpu_ranks = pr.getRanks();
+
   const float tolerance = 1e-4f;
   for (size_t i = 0; i < graph.getVertexCount(); ++i) {
-    float got = pr.getRank(i);
+    float got = gpu_ranks[i];          // use gpu_ranks vector instead of individual queue.copy
     float expected = reference_rank[i];
     if (std::abs(expected - got) > tolerance) {
       std::cerr << "Mismatch at vertex " << i
