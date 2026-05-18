@@ -15,8 +15,15 @@ namespace sygraph {
 
 namespace detail {
 
-static std::unordered_map<std::string, std::vector<sygraph::Event>> events;
-static size_t num_visited_edges = 0;
+inline std::unordered_map<std::string, std::vector<sygraph::Event>>& events() {
+  static auto* profiler_events = new std::unordered_map<std::string, std::vector<sygraph::Event>>();
+  return *profiler_events;
+}
+
+inline size_t& numVisitedEdges() {
+  static auto* visited_edges = new size_t(0);
+  return *visited_edges;
+}
 
 } // namespace detail
 
@@ -24,20 +31,22 @@ class Profiler {
 public:
   static void addEvent(sygraph::Event event, std::string tag = "") {
     if (tag.empty()) { tag = "default"; }
-    if (detail::events.find(tag) == detail::events.end()) { detail::events[tag] = std::vector<sygraph::Event>(); }
-    detail::events[tag].push_back(event);
+    auto& events = detail::events();
+    if (events.find(tag) == events.end()) { events[tag] = std::vector<sygraph::Event>(); }
+    events[tag].push_back(event);
   }
 
-  static void addVisitedEdges(size_t visited_edges) { detail::num_visited_edges += visited_edges; }
+  static void addVisitedEdges(size_t visited_edges) { detail::numVisitedEdges() += visited_edges; }
 
   static void clear() {
-    detail::events.clear();
-    detail::num_visited_edges = 0;
+    auto empty_events = std::unordered_map<std::string, std::vector<sygraph::Event>>();
+    detail::events().swap(empty_events);
+    detail::numVisitedEdges() = 0;
   }
 
   static void print(bool detailed = false) {
     double total_ms = 0.0;
-    for (auto& [tag, events] : detail::events) {
+    for (auto& [tag, events] : detail::events()) {
       double milliseconds = 0.0;
       size_t i = 0;
       std::cout << " Kernel [" << tag << " x " << events.size() << "] ";
@@ -54,7 +63,7 @@ public:
     }
     std::cout << "Total GPU Time: " << total_ms << " ms" << std::endl;
     double mteps = 0.0;
-    if (total_ms > 0.0) { mteps = ((detail::num_visited_edges / 1e6) / (total_ms / 1e3)); }
+    if (total_ms > 0.0) { mteps = ((detail::numVisitedEdges() / 1e6) / (total_ms / 1e3)); }
     std::cout << "Total Edge-Througput (MTEPS): " << mteps << " MTEPS" << std::endl;
   }
 };

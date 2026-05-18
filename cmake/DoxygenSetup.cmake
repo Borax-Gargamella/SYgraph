@@ -1,7 +1,7 @@
 # Copyright (c) 2025 University of Salerno
 # SPDX-License-Identifier: Apache-2.0
 
-option(SYGRAPH_DOCS "Generate documentation" ON)
+option(SYGRAPH_DOCS "Generate documentation" OFF)
 
 function(sygraph_resolve_doxygen out_executable)
   find_package(Doxygen QUIET)

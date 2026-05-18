@@ -153,3 +153,9 @@ inline void printProfilingOutput(const GraphOptions& opts) {
   (void)opts;
 #endif
 }
+
+inline void clearProfilingOutput() {
+#ifdef ENABLE_PROFILING
+  sygraph::Profiler::clear();
+#endif
+}

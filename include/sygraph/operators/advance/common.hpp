@@ -57,7 +57,7 @@ struct AdvanceContextBase {
   }
 
   SYCL_EXTERNAL inline bool isValidNeighbor(const AdvanceContextState&, const uint32_t& neighbor) const {
-    if constexpr (Direction == sygraph::operators::direction::pull) {
+    if constexpr (sygraph::operators::is_pull<Direction>()) {
       return in_dev_frontier.check(neighbor);
     } else {
       return true;
@@ -66,7 +66,7 @@ struct AdvanceContextBase {
 
   SYCL_EXTERNAL inline void insert(const AdvanceContextState&, const uint32_t& vertex, const uint32_t& neighbor) const {
     if constexpr (OFW == sygraph::frontier::frontier_view::vertex) {
-      if constexpr (Direction == sygraph::operators::direction::push) {
+      if constexpr (!sygraph::operators::is_pull<Direction>()) {
         out_dev_frontier.insert(neighbor);
       } else {
         out_dev_frontier.insert(vertex);
@@ -144,10 +144,10 @@ inline auto prepareAdvanceLaunch(GraphT& graph, const InFrontierT& in, const Out
   auto in_dev_frontier = in.getDeviceFrontier();
   auto out_dev_frontier = out.getDeviceFrontier();
   auto graph_dev = graph.getDeviceGraph();
-  if constexpr (Direction == sygraph::operators::direction::pull) { graph_dev = graph.getInverseDeviceGraph(); }
+  if constexpr (sygraph::operators::is_pull<Direction>()) { graph_dev = graph.getInverseDeviceGraph(); }
 
   const size_t coarsening_factor = types::detail::COMPUTE_UNIT_SIZE / sygraph::detail::device::getSubgroupSize(q);
-  const bool pull_advance = (Direction == sygraph::operators::direction::pull);
+  const bool pull_advance = sygraph::operators::is_pull<Direction>();
   auto launch_config = buildAdvanceLaunchConfig<InFW>(graph, in, pull_advance, expected_size, coarsening_factor, q);
 
   return AdvanceLaunchSetup<decltype(graph_dev), decltype(in_dev_frontier), decltype(out_dev_frontier)>{

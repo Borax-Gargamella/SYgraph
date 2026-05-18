@@ -63,4 +63,6 @@ int main(int argc, char** argv) {
   }
 
   printProfilingOutput(opts);
+  // Profiling events must be released before queue/runtime teardown at exit.
+  clearProfilingOutput();
 }

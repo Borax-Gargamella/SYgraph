@@ -149,7 +149,7 @@ struct WorkgroupMappedBitmapKernel {
   const LambdaT functor;
 
   SYCL_EXTERNAL inline bool shouldShortCircuitSlot(const uint32_t slot) const {
-    if constexpr (Direction == sygraph::operators::direction::pull) {
+    if constexpr (sygraph::operators::is_short_circuit<Direction>()) {
       sycl::atomic_ref<uint32_t, sycl::memory_order::relaxed, sycl::memory_scope::work_group> slot_done(source_done[slot]);
       return slot_done.load() != 0;
     } else {
@@ -167,7 +167,7 @@ struct WorkgroupMappedBitmapKernel {
     if (!context.isValidNeighbor(state, neighbor)) { return false; }
     if (!functor(source, neighbor, edge, weight)) { return false; }
     context.insert(state, source, neighbor);
-    if constexpr (Direction == sygraph::operators::direction::pull) {
+    if constexpr (sygraph::operators::is_short_circuit<Direction>()) {
       sycl::atomic_ref<uint32_t, sycl::memory_order::relaxed, sycl::memory_scope::work_group> slot_done(source_done[slot]);
       slot_done.store(1);
     }

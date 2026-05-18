@@ -206,7 +206,7 @@ struct BitmapKernel {
     if (!context.isValidNeighbor(state, neighbor)) { return false; }
     if (!functor(vertex, neighbor, edge, weight)) { return false; }
     context.insert(state, vertex, neighbor);
-    if constexpr (Direction == sygraph::operators::direction::pull) {
+    if constexpr (sygraph::operators::is_short_circuit<Direction>()) {
       sycl::atomic_ref<uint32_t, sycl::memory_order::relaxed, sycl::memory_scope::work_group> claimed(flags[flag_index]);
       claimed.store(1);
     }
@@ -214,7 +214,7 @@ struct BitmapKernel {
   }
 
   SYCL_EXTERNAL inline bool shouldShortCircuitWorkgroup(const uint32_t slot) const {
-    if constexpr (Direction == sygraph::operators::direction::pull) {
+    if constexpr (sygraph::operators::is_short_circuit<Direction>()) {
       sycl::atomic_ref<uint32_t, sycl::memory_order::relaxed, sycl::memory_scope::work_group> claimed(workgroup_claimed[slot]);
       return claimed.load() != 0;
     }
@@ -222,7 +222,7 @@ struct BitmapKernel {
   }
 
   SYCL_EXTERNAL inline bool shouldShortCircuitSubgroup(const uint32_t slot) const {
-    if constexpr (Direction == sygraph::operators::direction::pull) {
+    if constexpr (sygraph::operators::is_short_circuit<Direction>()) {
       sycl::atomic_ref<uint32_t, sycl::memory_order::relaxed, sycl::memory_scope::work_group> claimed(subgroup_claimed[slot]);
       return claimed.load() != 0;
     }
@@ -230,7 +230,7 @@ struct BitmapKernel {
   }
 
   SYCL_EXTERNAL inline bool shouldShortCircuitLane() const {
-    if constexpr (Direction == sygraph::operators::direction::pull) { return true; }
+    if constexpr (sygraph::operators::is_short_circuit<Direction>()) { return true; }
     return false;
   }
 };
