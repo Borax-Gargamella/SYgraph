@@ -38,7 +38,7 @@ namespace detail {
  * mass.
  *
  * Memory layout:
- *   - rank    : device - copied to host on demand via queue.copy in getRank()/getRanks()
+ *   - rank    : shared - UVM prefetch compensates irregular pull-mode access; copied to host via queue.copy in getRank()/getRanks()
  *   - new_rank: device - written only by GPU kernels, never read from host during run()
  *   - out_deg : device - written once (Step 1), read-only during iteration
  *   - dsum    : shared (1 scalar) - written by GPU reduction, read back by host each iter
@@ -52,7 +52,7 @@ struct PRInstance {
   using weight_t = float;
 
   GraphType& G;     /**< The graph on which the PageRank algorithm will be performed. */
-  float* rank;      /**< Current PageRank values, one per vertex (device). */
+  float* rank;      /**< Current PageRank values, one per vertex (shared). */
   float* new_rank;  /**< Per-iteration accumulator for incoming rank contributions (device). */
   float* out_deg;   /**< Pre-computed out-degree for each vertex (device). */
   float* dsum;      /**< Scalar: dangling-node mass for the current iteration (shared). */
@@ -69,7 +69,7 @@ struct PRInstance {
     sycl::queue& queue = G.getQueue();
     size_t size = G.getVertexCount();
 
-    rank     = sygraph::memory::detail::memoryAlloc<float, memory::space::device>(size, queue);
+    rank     = sygraph::memory::detail::memoryAlloc<float, memory::space::shared>(size, queue);
     new_rank = sygraph::memory::detail::memoryAlloc<float, memory::space::device>(size, queue);
     out_deg  = sygraph::memory::detail::memoryAlloc<float, memory::space::device>(size, queue);
     dsum     = sygraph::memory::detail::memoryAlloc<float, memory::space::shared>(1,    queue);
@@ -95,6 +95,39 @@ struct PRInstance {
 };
 
 } // namespace detail
+
+/**
+ * @brief Thin wrapper around a graph that swaps forward and inverse device graphs.
+ *
+ * Passed to advance::vertices<workgroup_mapped> to implement the PULL step:
+ * advancing over the inverse graph in push mode is equivalent to pull, but
+ * without the frontier-filtering bug in advance::frontier<pull_all>.
+ */
+template<typename GraphType>
+struct InverseGraphView {
+  using vertex_t = typename GraphType::vertex_t;
+  using edge_t   = typename GraphType::edge_t;
+  using weight_t = typename GraphType::weight_t;
+
+  GraphType& G;
+  InverseGraphView(GraphType& g) : G(g) {}
+
+  sycl::queue&  getQueue()               { return G.getQueue(); }
+  auto          getDeviceGraph()         { return G.getInverseDeviceGraph(); }
+  auto          getInverseDeviceGraph()  { return G.getDeviceGraph(); }
+  auto          getProperties()    const { return G.getProperties(); }
+  size_t        getVertexCount()   const { return G.getVertexCount(); }
+  size_t        getEdgeCount()     const { return G.getEdgeCount(); }
+  size_t        getDegree(vertex_t v)          const { return G.getDegree(v); }
+  vertex_t      getFirstNeighbor(vertex_t v)   const { return G.getFirstNeighbor(v); }
+  vertex_t      getSourceVertex(edge_t e)      const { return G.getSourceVertex(e); }
+  vertex_t      getDestinationVertex(edge_t e) const { return G.getDestinationVertex(e); }
+  weight_t      getEdgeWeight(edge_t e)        const { return G.getEdgeWeight(e); }
+  size_t        getIntersectionCount(vertex_t a, vertex_t b,
+                    std::function<void(vertex_t)> f) const {
+    return G.getIntersectionCount(a, b, f);
+  }
+};
 
 /**
  * @class PR
@@ -199,30 +232,52 @@ public:
     // ------------------------------------------------------------------
     // Step 1: pre-compute out-degree for every vertex (executed once).
     //
-    // Uses advance::vertices<workgroup_mapped> which assigns one workgroup
-    // per vertex. Each thread in the workgroup processes one outgoing edge
-    // and atomically increments out_deg[src].
+    // Uses a plain parallel_for rather than advance::vertices<workgroup_mapped>
+    // to avoid a mangled-name collision with the push kernel in step (c).
+    // Both calls would instantiate WorkgroupMappedBitmapKernel<push,graph,none,LT>
+    // with distinct lambda types LT, but icpx cannot distinguish two anonymous
+    // lambda types when generating the SYCL_EXTERNAL device symbols for the
+    // kernel's helper methods, producing duplicate symbols at link time.
+    // A plain parallel_for reading row_offsets is also faster: no atomics,
+    // no workgroup-mapping overhead, and one thread per vertex is sufficient.
     //
-    // Note: G.getDeviceGraph().getRowOffsets() is used instead of
-    // G.getRowOffsets() because with GRAPH_LOCATION=device the latter
-    // returns a pointer to the host-side std::vector (CPU RAM), which
-    // is not accessible from GPU kernels.
+    // G.getDeviceGraph().getRowOffsets() is used (not G.getRowOffsets()) so
+    // the pointer is always a USM device allocation accessible from GPU kernels,
+    // even when GRAPH_LOCATION=device.
     // ------------------------------------------------------------------
     {
-      auto e = sygraph::operators::advance::vertices<load_balance_t::workgroup_mapped>(
-          G, [=](auto src, auto dst, auto edge, auto weight) -> bool {
-            (void)dst;
-            (void)edge;
-            (void)weight;
-            sygraph::sync::atomicFetchAdd(out_deg + src, 1.0f);
-            return false;
-          });
-      e.waitAndThrow();
+      auto* row_offsets = G.getDeviceGraph().getRowOffsets();
+      auto e = queue.submit([&](sycl::handler& cgh) {
+        cgh.parallel_for<class PROutDegreeKernel>(sycl::range<1>(N), [=](sycl::id<1> idx) {
+          size_t v  = idx[0];
+          out_deg[v] = static_cast<float>(row_offsets[v + 1] - row_offsets[v]);
+        });
+      });
+      e.wait();
 #ifdef ENABLE_PROFILING
       sygraph::Profiler::addEvent(e, "PR::OutDegree");
 #endif
     }
 
+    // ------------------------------------------------------------------
+    // Pre-Step (PR_PULL only): build an all-active vertex frontier.
+    //
+    // advance::frontier<pull_all, workgroup_mapped, vertex> requires a
+    // proper vertex frontier as input so that isValidNeighbor() can call
+    // in_dev_frontier.check(neighbor).  For PageRank every vertex is always
+    // active, so we fill the frontier once before the loop and reuse it.
+    //
+    // WHY NOT advance::vertices<Lb, direction::pull_all>:
+    //   That overload does not exist.  advance::vertices always uses
+    //   frontier_view::graph + direction::push; adding a Direction overload
+    //   requires modifying advance.hpp (library code).
+    //
+    // WHY NOT frontier_view::graph + pull_all:
+    //   prepareAdvanceLaunch selects the inverse graph for is_pull<D>==true,
+    //   but isValidNeighbor still calls in_dev_frontier.check(neighbor)
+    //   where in_dev_frontier is the bool returned by Frontier<T,none>
+    //   (frontier_type::none) — calling bool::check() does not compile.
+    // ------------------------------------------------------------------
     // ---------------------------------------------------------------------
     // Step 2: power iteration.
     // ---------------------------------------------------------------------
@@ -263,7 +318,11 @@ public:
       //     redistribution in a single fill operation.
       {
         float base = (1.0f - damping + dsum[0]) / static_cast<float>(N);
-        queue.fill(new_rank, base, N).wait();
+        auto fill_e = queue.fill(new_rank, base, N);
+        fill_e.wait();
+#ifdef ENABLE_PROFILING
+        sygraph::Profiler::addEvent(fill_e, "PR::Fill");
+#endif
       }
 
       // (c) Edge contribution kernel - push or pull advance.
@@ -281,10 +340,19 @@ public:
       //       May reduce atomic contention on power-law graphs where
       //       hub vertices receive many contributions in push mode.
 #ifdef PR_PULL
+      // Pull via InverseGraphView: advance::vertices<workgroup_mapped> uses
+      // frontier_view::graph (all vertices processed, no frontier filtering)
+      // and direction::push (no isValidNeighbor filtering). By swapping
+      // getDeviceGraph() to return the inverse graph, each edge (dst->src) in
+      // the inverse traversal accumulates:
+      //   new_rank[src] += damping * rank[dst] / out_deg[dst]
+      // which is the correct PULL formula, and uses the same workgroup_mapped
+      // load balancer as the PUSH path.
       {
-        auto e = sygraph::operators::advance::vertices<load_balance_t::workgroup_mapped,
-                                                       sygraph::operators::direction::pull>(
-            G, [=](auto src, auto dst, auto edge, auto weight) -> bool {
+        InverseGraphView<GraphType> inv{G};
+        auto e = sygraph::operators::advance::vertices<load_balance_t::workgroup_mapped>(
+            inv,
+            [=](auto src, auto dst, auto edge, auto weight) -> bool {
               (void)edge;
               (void)weight;
               float od = out_deg[dst];
