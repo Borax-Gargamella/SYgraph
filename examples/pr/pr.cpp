@@ -66,9 +66,9 @@ int pagerank_cpu(const GraphT& graph, std::vector<float>& rank, float damping, f
       float od = out_deg[src];
       if (od <= 0.0f) { continue; }
       float contrib = damping * rank[src] / od;
-      vertex_t start = row_offsets[src];
-      vertex_t end   = row_offsets[src + 1];
-      for (vertex_t off = start; off < end; ++off) {
+      auto start = row_offsets[src];
+      auto end   = row_offsets[src + 1];
+      for (auto off = start; off < end; ++off) {
         new_rank[col_indices[off]] += contrib;
       }
     }
