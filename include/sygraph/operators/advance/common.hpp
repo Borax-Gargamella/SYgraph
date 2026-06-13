@@ -58,7 +58,11 @@ struct AdvanceContextBase {
 
   SYCL_EXTERNAL inline bool isValidNeighbor(const AdvanceContextState&, const uint32_t& neighbor) const {
     if constexpr (sygraph::operators::is_pull<Direction>()) {
-      return in_dev_frontier.check(neighbor);
+      if constexpr (IFW == sygraph::frontier::frontier_view::graph) {
+        return true;  // graph-view pull: all vertices are valid sources (no frontier filtering)
+      } else {
+        return in_dev_frontier.check(neighbor);
+      }
     } else {
       return true;
     }
