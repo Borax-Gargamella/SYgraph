@@ -1,6 +1,30 @@
 /*
  * Copyright (c) 2025 University of Salerno
  * SPDX-License-Identifier: Apache-2.0
+ *
+ * Direction-optimizing PageRank (push / pull / hybrid / probe) on GPU (SYCL).
+ *
+ *   rank[v] = (1 - damping + dsum) / N
+ *             + damping * sum_{(u,v) in E} rank[u] * weight(u,v) / Sigma_w(u)
+ *
+ * Convergence: L-infinity, stop when max_v |rank_new[v] - rank_old[v]| < epsilon.
+ *
+ * Compile-time flags:
+ *   -DPR_WEIGHTED : multiply edge contributions by the (pattern-safe) edge weight
+ *     and make out-degree a weight sum. OFF by default: the edge functors do not
+ *     touch `weight`, so the compiler removes the per-edge getEdgeWeight (values[])
+ *     load. On unweighted graphs the result is identical (weight 0 -> 1.0 is a x1.0
+ *     no-op) but measurably faster on the memory-bound push/pull kernels. Turn ON
+ *     only for genuinely weighted graphs.
+ *
+ * Library usage: everything edge-centric goes through the framework advance
+ * operator (push: advance::vertices; pull: advance::frontier<pull_all> over the
+ * inverse CSR). The remaining per-vertex kernels (OutDegree, ScaledRankInit,
+ * InitialDangling, UpdateAndDangling) stay as raw queue.submit ON PURPOSE: the
+ * library compute::execute/reduce operator (operators/for) only accepts an mlb
+ * *vertex* frontier, so there is no whole-graph map/reduce to call, and
+ * UpdateAndDangling needs TWO simultaneous sycl::reductions (maximum for delta +
+ * plus for dsum), which compute::reduce cannot express.
  */
 #pragma once
 
@@ -9,6 +33,7 @@
 #include <sygraph/frontier/frontier.hpp>
 #include <sygraph/graph/graph.hpp>
 #include <sygraph/operators/advance/advance.hpp>
+#include <sygraph/operators/config.hpp>
 #include <sygraph/operators/for/for.hpp>
 #include <sygraph/sync/atomics.hpp>
 
@@ -16,7 +41,10 @@
 #include <sygraph/utils/profiler.hpp>
 #endif
 
+#include <chrono>
+#include <cmath>
 #include <memory>
+#include <set>
 #include <vector>
 
 /**
@@ -27,23 +55,24 @@
  */
 namespace sygraph {
 namespace algorithms {
+
+enum class pr_direction { push, pull, hybrid, probe };  // probe = auto-tune push vs pull at runtime
+
+struct PRRunDetails {
+  size_t iterations        = 0;
+  std::set<size_t> push_steps;
+  std::set<size_t> pull_steps;
+  bool  power_law_detected = false;
+  float max_out_deg        = 0.0f;
+};
+
 namespace detail {
 
 /**
  * @brief Represents an instance of the PageRank algorithm on a graph.
  *
- * The PRInstance struct encapsulates the necessary data and operations for performing the
- * PageRank algorithm on a graph. It stores the graph and the per-vertex arrays for current
- * rank, next-iteration accumulator, pre-computed out-degrees, and a scalar for dangling-node
- * mass.
- *
- * Memory layout:
- *   - rank    : shared - UVM prefetch compensates irregular pull-mode access; copied to host via queue.copy in getRank()/getRanks()
- *   - new_rank: device - written only by GPU kernels, never read from host during run()
- *   - out_deg : device - written once (Step 1), read-only during iteration
- *   - dsum    : shared (1 scalar) - written by GPU reduction, read back by host each iter
- *
- * @tparam GraphType The type of the graph on which the PageRank algorithm will be performed.
+ * The PRInstance struct holds the per-vertex USM arrays used by the power
+ * iteration and precomputes the out-degrees on device.
  */
 template<typename GraphType>
 struct PRInstance {
@@ -51,113 +80,111 @@ struct PRInstance {
   using edge_t = typename GraphType::edge_t;
   using weight_t = float;
 
-  GraphType& G;     /**< The graph on which the PageRank algorithm will be performed. */
-  float* rank;      /**< Current PageRank values, one per vertex (shared). */
-  float* new_rank;  /**< Per-iteration accumulator for incoming rank contributions (device). */
-  float* out_deg;   /**< Pre-computed out-degree for each vertex (device). */
-  float* dsum;      /**< Scalar: dangling-node mass for the current iteration (shared). */
+  GraphType& G;
+  float* rank;        /**< Current PageRank values, init 1/N (shared USM, read back by getRanks()). */
+  float* new_rank;    /**< Per-iteration accumulator, Fill + atomic adds (device). */
+  float* out_deg;     /**< Out-degree, = sum of out-edge weights with PR_WEIGHTED (device). */
+  float* inv_out_deg; /**< 1 / out_deg, 0 for sinks; precomputed (device). */
+  float* dsum;        /**< Dangling-node mass scalar for the current iteration (shared). */
+  float* delta;       /**< L-infinity convergence scalar for the current iteration (shared). */
+  float  max_out_deg = 0.0f; /**< Max out-degree; power-law detection. */
+  float* scaled_rank; /**< damping * rank * inv_out_deg, precomputed so push/pull read ONE array per edge instead of two (device). */
 
-  /**
-   * @brief Constructs a PRInstance object and allocates / initializes the per-vertex arrays.
-   *
-   * All arrays are zero-initialised (or set to 1/N for rank) via queue.fill()
-   * before any kernel is launched.
-   *
-   * @param G The graph on which the PageRank algorithm will be performed.
-   */
   PRInstance(GraphType& G) : G(G) {
     sycl::queue& queue = G.getQueue();
     size_t size = G.getVertexCount();
 
-    rank     = sygraph::memory::detail::memoryAlloc<float, memory::space::shared>(size, queue);
-    new_rank = sygraph::memory::detail::memoryAlloc<float, memory::space::device>(size, queue);
-    out_deg  = sygraph::memory::detail::memoryAlloc<float, memory::space::device>(size, queue);
-    dsum     = sygraph::memory::detail::memoryAlloc<float, memory::space::shared>(1,    queue);
+    rank        = memory::detail::memoryAlloc<float, memory::space::shared>(size, queue);
+    new_rank    = memory::detail::memoryAlloc<float, memory::space::device>(size, queue);
+    out_deg     = memory::detail::memoryAlloc<float, memory::space::device>(size, queue);
+    inv_out_deg = memory::detail::memoryAlloc<float, memory::space::device>(size, queue);
+    dsum        = memory::detail::memoryAlloc<float, memory::space::shared>(1, queue);
+    delta       = memory::detail::memoryAlloc<float, memory::space::shared>(1, queue);
+    scaled_rank = memory::detail::memoryAlloc<float, memory::space::device>(size, queue);
 
     const float base_score = 1.0f / static_cast<float>(size);
-    queue.fill(rank, base_score, size);
-    queue.fill(new_rank, 0.0f, size);
-    queue.fill(out_deg, 0.0f, size);
-    queue.fill(dsum, 0.0f, 1);
+    queue.fill(rank,        base_score, size);
+    queue.fill(new_rank,    0.0f,       size);
+    queue.fill(out_deg,     0.0f,       size);
+    queue.fill(inv_out_deg, 0.0f,       size);
+    queue.fill(dsum,        0.0f,       1);
+    queue.fill(delta,       0.0f,       1);
+    queue.fill(scaled_rank, 0.0f,       size);
     queue.wait_and_throw();
+
+    // Pre-compute out-degree and its reciprocal. The unweighted (default) path uses
+    // the device-graph API (getDegree, same pattern as bfs.hpp); the weighted path
+    // must sum values[] so it keeps the raw CSR pointers.
+    float* local_out_deg     = out_deg;
+    float* local_inv_out_deg = inv_out_deg;
+    auto graph_dev           = G.getDeviceGraph();
+#ifdef PR_WEIGHTED
+    auto* row_offsets = graph_dev.getRowOffsets();
+    auto* edge_values = graph_dev.getValues();
+#endif
+
+    auto e = queue.submit([&](sycl::handler& cgh) {
+      cgh.parallel_for<class PROutDegreeKernel>(sycl::range<1>(size), [=](sycl::id<1> idx) {
+        size_t v = idx[0];
+#ifdef PR_WEIGHTED
+        // Weighted: out-degree = sum of out-edge weights, fallback to edge count
+        // when the sum is 0 (pattern/unweighted MTX stores weights as 0).
+        auto start = row_offsets[v];
+        auto end   = row_offsets[v + 1];
+        float w_sum = 0.0f;
+        for (auto e_idx = start; e_idx < end; ++e_idx) { w_sum += static_cast<float>(edge_values[e_idx]); }
+        float eff = (w_sum > 0.0f) ? w_sum : static_cast<float>(end - start);
+#else
+        float eff = static_cast<float>(graph_dev.getDegree(static_cast<vertex_t>(v)));
+#endif
+        local_out_deg[v]     = eff;
+        local_inv_out_deg[v] = (eff > 0.0f) ? (1.0f / eff) : 0.0f;
+      });
+    });
+    e.wait();
+#ifdef ENABLE_PROFILING
+    sygraph::Profiler::addEvent(e, "PR::OutDegree");
+#endif
+
+    // Max out-degree for the topology-aware hybrid heuristic.
+    {
+      float* dev_max  = memory::detail::memoryAlloc<float, memory::space::shared>(1, queue);
+      float* local_od = out_deg;
+      queue.submit([&](sycl::handler& h) {
+        auto red = sycl::reduction(dev_max, sycl::maximum<float>{},
+                                   sycl::property::reduction::initialize_to_identity{});
+        h.parallel_for(sycl::range<1>(size), red,
+                       [=](sycl::id<1> i, auto& m) { m.combine(local_od[i]); });
+      }).wait();
+      max_out_deg = dev_max[0];
+      memory::detail::releaseUSM(dev_max, queue);
+    }
   }
 
-  /**
-   * @brief Destroys the PRInstance object and frees all allocated USM memory.
-   */
   ~PRInstance() {
     sycl::queue& queue = G.getQueue();
-    memory::detail::releaseUSM(rank,     queue);
-    memory::detail::releaseUSM(new_rank, queue);
-    memory::detail::releaseUSM(out_deg,  queue);
-    memory::detail::releaseUSM(dsum,     queue);
+    memory::detail::releaseUSM(rank,        queue);
+    memory::detail::releaseUSM(new_rank,    queue);
+    memory::detail::releaseUSM(out_deg,     queue);
+    memory::detail::releaseUSM(inv_out_deg, queue);
+    memory::detail::releaseUSM(dsum,        queue);
+    memory::detail::releaseUSM(delta,       queue);
+    memory::detail::releaseUSM(scaled_rank, queue);
   }
 };
 
 } // namespace detail
 
 /**
- * @brief Thin wrapper around a graph that swaps forward and inverse device graphs.
+ * @brief Represents the PageRank algorithm (direction-optimizing power iteration).
  *
- * Passed to advance::vertices<workgroup_mapped> to implement the PULL step:
- * advancing over the inverse graph in push mode is equivalent to pull, but
- * without the frontier-filtering bug in advance::frontier<pull_all>.
- */
-template<typename GraphType>
-struct InverseGraphView {
-  using vertex_t = typename GraphType::vertex_t;
-  using edge_t   = typename GraphType::edge_t;
-  using weight_t = typename GraphType::weight_t;
-
-  GraphType& G;
-  InverseGraphView(GraphType& g) : G(g) {}
-
-  sycl::queue&  getQueue()               { return G.getQueue(); }
-  auto          getDeviceGraph()         { return G.getInverseDeviceGraph(); }
-  auto          getInverseDeviceGraph()  { return G.getDeviceGraph(); }
-  auto          getProperties()    const { return G.getProperties(); }
-  size_t        getVertexCount()   const { return G.getVertexCount(); }
-  size_t        getEdgeCount()     const { return G.getEdgeCount(); }
-  size_t        getDegree(vertex_t v)          const { return G.getDegree(v); }
-  vertex_t      getFirstNeighbor(vertex_t v)   const { return G.getFirstNeighbor(v); }
-  vertex_t      getSourceVertex(edge_t e)      const { return G.getSourceVertex(e); }
-  vertex_t      getDestinationVertex(edge_t e) const { return G.getDestinationVertex(e); }
-  weight_t      getEdgeWeight(edge_t e)        const { return G.getEdgeWeight(e); }
-  size_t        getIntersectionCount(vertex_t a, vertex_t b,
-                    std::function<void(vertex_t)> f) const {
-    return G.getIntersectionCount(a, b, f);
-  }
-};
-
-/**
- * @class PR
- * @brief PageRank via power-iteration on GPU (SYCL).
+ * Three traversals selected at runtime via the `direction` parameter:
+ *   - push   : advance::vertices<workgroup_mapped> over outgoing edges (atomic add).
+ *   - pull   : advance::frontier<pull_all, workgroup_mapped> over the inverse CSR.
+ *   - hybrid : push for power-law graphs (or the first alpha fraction), else pull.
+ *   - probe  : times push vs pull on the first two iterations and commits to the faster.
  *
- * The PR class template provides methods to initialize, reset, and run the PageRank algorithm
- * on a given graph. It uses SYCL for parallel execution and supports profiling.
- * Implements the classic PageRank power-iteration with dangling-node redistribution:
- *
- *   rank[v] = (1 - damping + dangling_sum) / N
- *             + damping * sum_{(u,v) in E} rank[u] / out_deg[u]
- *
- * where dangling_sum = damping * sum_{u : out_deg[u]==0} rank[u].
- *
- * Convergence criterion: L-infinity norm (max |rank[v] - old_rank[v]|),
- * identical to Gunrock for a fair comparison.
- *
- * ┌──────────────────────────────────────────────────────────────────────┐
- * │  Compile-time flags (pass via -DCMAKE_CXX_FLAGS="...")               │
- * ├───────────────┬────────────────────────────────────────────────────  │
- * │ Flag          │ Effect                                               │
- * ├───────────────┼────────────────────────────────────────────────────  │
- * │ (none)        │ Push advance: workgroup_mapped (default, fastest on  │
- * │               │ uniform graphs)                                      │
- * │ -DPR_PULL     │ Pull advance: workgroup_mapped with direction::pull  │
- * │               │ Uses the inverse graph; may be faster on power-law   │
- * │               │ graphs where many vertices have low in-degree.       │
- * └───────────────┴──────────────────────────────────────────────────────│
- *
- * @tparam GraphType The type of the graph on which the PageRank algorithm will be executed.
+ * @tparam GraphType The type of the graph on which the algorithm will be performed.
  */
 template<typename GraphType>
 class PR {
@@ -167,155 +194,136 @@ class PR {
 
 public:
   /**
-   * @brief Constructor to initialize the PageRank algorithm with a given graph.
-   *
-   * @param g Reference to the graph on which the PageRank algorithm will be executed.
+   * @brief Constructs a PR object.
    */
   PR(GraphType& g) : _g(g) {};
 
   /**
-   * @brief Initializes the PRInstance.
-   *
-   * Allocates and zero-initializes all per-vertex arrays (rank, new_rank,
-   * out_deg, dsum). Must be called before run().
+   * @brief Initializes the PR algorithm state. Call before run().
    */
   void init() { _instance = std::make_unique<detail::PRInstance<GraphType>>(_g); }
 
   /**
-   * @brief Resets the internal state of the instance, freeing all allocated memory.
+   * @brief Resets the PR algorithm.
    */
   void reset() { _instance.reset(); }
 
   /**
-   * @brief Executes the PageRank algorithm with dangling-node redistribution.
+   * @brief Runs the PageRank algorithm.
    *
-   * The algorithm runs as follows:
+   * Each iteration:
+   *   (a) Fill    - new_rank[v] = (1-d+dsum)/N (teleportation + dangling base score;
+   *                 dsum primed by InitialDangling, then refreshed by UpdateAndDangling).
+   *   (b) Advance - distribute rank through edges (push or pull, see the class brief):
+   *                 push: new_rank[dst] += scaled_rank[src]; pull: new_rank[src] += scaled_rank[dst].
+   *   (c) UpdateAndDangling (fused) - copy new_rank -> rank, refresh scaled_rank,
+   *                 compute the L-infinity delta and the next iteration's dangling mass.
+   *   (d) Stop if delta < epsilon.
    *
-   *   Step 1 (once): compute out-degree for every vertex using
-   *                  advance::vertices<workgroup_mapped>. One workgroup is
-   *                  assigned per vertex; each thread atomically increments
-   *                  out_deg[src] for every outgoing edge.
-   *
-   *   Step 2 (per iteration):
-   *     (a) Dangling kernel  - reduction over vertices with out_deg==0
-   *                            to compute the total dangling mass dsum.
-   *     (b) Fill kernel      - initialise new_rank[v] = (1-d+dsum)/N
-   *                            (teleportation + dangling redistribution).
-   *     (c) Push/Pull kernel - distribute rank through edges:
-   *           Push (default): new_rank[dst] += d * rank[src] / out_deg[src]
-   *           Pull (-DPR_PULL): new_rank[src] += d * rank[dst] / out_deg[dst]
-   *                             using the inverse graph.
-   *     (d) Update kernel    - copy new_rank -> rank and compute
-   *                            L∞ delta = max_v |new_rank[v] - rank[v]|.
-   *     (e) Convergence check - stop if delta < epsilon.
-   *
-   * @param damping  Damping factor (typically 0.85).
-   * @param epsilon  Convergence threshold on the L-infinity norm of consecutive rank vectors (default 1e-6).
-   * @param max_iter Maximum number of iterations (default 100).
-   *
+   * @param direction The traversal direction (push, pull, hybrid, or probe).
+   * @param damping   Damping factor (typically 0.85).
+   * @param epsilon   Convergence threshold on the L-infinity norm of consecutive rank vectors (default 1e-6).
+   * @param max_iter  Maximum number of iterations (default 100).
+   * @param alpha     Hybrid: fraction of iterations using push.
+   * @param beta      Unused (API compatibility).
    * @throws std::runtime_error if the PR instance is not initialized.
    */
-  void run(float damping = 0.85f, float epsilon = 1e-6f, int max_iter = 100) {
+  PRRunDetails run(pr_direction direction = pr_direction::push,
+                   float damping = 0.85f,
+                   float epsilon = 1e-6f,
+                   int max_iter = 100,
+                   float alpha = 0.5f,
+                   float beta = 18.0f) {
+    (void)beta;
+    PRRunDetails details;
     if (!_instance) { throw std::runtime_error("PR instance not initialized"); }
 
     auto& G = _instance->G;
     sycl::queue& queue = G.getQueue();
     size_t N = G.getVertexCount();
 
-    float* rank     = _instance->rank;
-    float* new_rank = _instance->new_rank;
-    float* out_deg  = _instance->out_deg;
-    float* dsum     = _instance->dsum;
+    float* rank        = _instance->rank;
+    float* new_rank    = _instance->new_rank;
+    float* out_deg     = _instance->out_deg;
+    float* inv_out_deg = _instance->inv_out_deg;
+    float* dsum        = _instance->dsum;
+    float* delta       = _instance->delta;
+    float* scaled_rank = _instance->scaled_rank;
 
-    using load_balance_t = sygraph::operators::load_balancer;
+    using load_balance_t  = sygraph::operators::load_balancer;
+    using direction_t     = sygraph::operators::direction;
+    using frontier_view_t = sygraph::frontier::frontier_view;
 
-    // ------------------------------------------------------------------
-    // Step 1: pre-compute out-degree for every vertex (executed once).
-    //
-    // Uses a plain parallel_for rather than advance::vertices<workgroup_mapped>
-    // to avoid a mangled-name collision with the push kernel in step (c).
-    // Both calls would instantiate WorkgroupMappedBitmapKernel<push,graph,none,LT>
-    // with distinct lambda types LT, but icpx cannot distinguish two anonymous
-    // lambda types when generating the SYCL_EXTERNAL device symbols for the
-    // kernel's helper methods, producing duplicate symbols at link time.
-    // A plain parallel_for reading row_offsets is also faster: no atomics,
-    // no workgroup-mapping overhead, and one thread per vertex is sufficient.
-    //
-    // G.getDeviceGraph().getRowOffsets() is used (not G.getRowOffsets()) so
-    // the pointer is always a USM device allocation accessible from GPU kernels,
-    // even when GRAPH_LOCATION=device.
-    // ------------------------------------------------------------------
+    // Fraction of iterations that use push in hybrid mode.
+    const int push_iters = static_cast<int>(static_cast<float>(max_iter) * alpha);
+
+    // Power-law graphs have a hub whose degree >> sqrt(N): pull causes an L1 hotspot
+    // on hub destinations, so hybrid auto-selects push-only for them.
+    const float max_od   = _instance->max_out_deg;
+    const bool is_power_law = (max_od > std::sqrt(static_cast<float>(N)));
+    details.power_law_detected = is_power_law;
+    details.max_out_deg        = max_od;
+
+    // Initialise scaled_rank from the starting rank (1/N); the fused update kernel
+    // refreshes it each iteration thereafter.
     {
-      auto* row_offsets = G.getDeviceGraph().getRowOffsets();
       auto e = queue.submit([&](sycl::handler& cgh) {
-        cgh.parallel_for<class PROutDegreeKernel>(sycl::range<1>(N), [=](sycl::id<1> idx) {
-          size_t v  = idx[0];
-          out_deg[v] = static_cast<float>(row_offsets[v + 1] - row_offsets[v]);
+        cgh.parallel_for<class PRScaledRankInitKernel>(sycl::range<1>(N), [=](sycl::id<1> idx) {
+          size_t v = idx[0];
+          scaled_rank[v] = damping * rank[v] * inv_out_deg[v];
         });
       });
       e.wait();
+    }
+
+    // InitialDangling: Prime dsum from the initial rank, for iteration 0's fill; the fused update
+    // kernel computes dsum for every subsequent iteration.
+    {
+      auto e = queue.submit([&](sycl::handler& cgh) {
+        auto red = sycl::reduction(dsum, sycl::plus<float>(),
+                                   sycl::property::reduction::initialize_to_identity{});
+        cgh.parallel_for<class PRInitialDanglingKernel>(
+            sycl::range<1>(N), red, [=](sycl::id<1> idx, auto& sum) {
+              size_t v = idx[0];
+              if (out_deg[v] == 0.0f) { sum += damping * rank[v]; }
+            });
+      });
+      e.wait();
 #ifdef ENABLE_PROFILING
-      sygraph::Profiler::addEvent(e, "PR::OutDegree");
+      sygraph::Profiler::addEvent(e, "PR::InitialDangling");
 #endif
     }
 
-    // ------------------------------------------------------------------
-    // Pre-Step (PR_PULL only): build an all-active vertex frontier.
-    //
-    // advance::frontier<pull_all, workgroup_mapped, vertex> requires a
-    // proper vertex frontier as input so that isValidNeighbor() can call
-    // in_dev_frontier.check(neighbor).  For PageRank every vertex is always
-    // active, so we fill the frontier once before the loop and reuse it.
-    //
-    // WHY NOT advance::vertices<Lb, direction::pull_all>:
-    //   That overload does not exist.  advance::vertices always uses
-    //   frontier_view::graph + direction::push; adding a Direction overload
-    //   requires modifying advance.hpp (library code).
-    //
-    // WHY NOT frontier_view::graph + pull_all:
-    //   prepareAdvanceLaunch selects the inverse graph for is_pull<D>==true,
-    //   but isValidNeighbor still calls in_dev_frontier.check(neighbor)
-    //   where in_dev_frontier is the bool returned by Frontier<T,none>
-    //   (frontier_type::none) — calling bool::check() does not compile.
-    // ------------------------------------------------------------------
-    // ---------------------------------------------------------------------
-    // Step 2: power iteration.
-    // ---------------------------------------------------------------------
+    // Probe: time push (iter 0) vs pull (iter 1), then commit to the faster for the
+    // remaining iterations; both probe iterations are real PR steps. If the run
+    // converges before iter 1 the timing is unavailable, so the concentration
+    // max_od * N / E (= max_od / avg_deg, hub extremeness) sets the DEFAULT
+    // direction; the measured timing overrides it when available.
+    const double probe_conc = (G.getEdgeCount() > 0)
+        ? (static_cast<double>(max_od) * static_cast<double>(N)
+           / static_cast<double>(G.getEdgeCount()))
+        : 0.0;
+    static constexpr double PROBE_CONC_THRESHOLD = 500.0;
+    bool   probe_use_push = (probe_conc <= PROBE_CONC_THRESHOLD);  // overridden by timing when available
+    bool   probe_decided  = false;
+    double probe_push_ms  = 0.0, probe_pull_ms = 0.0;
+
     for (int iter = 0; iter < max_iter; ++iter) {
 
-      // (a) Dangling-node mass kernel.
-      //
-      //     Computes dsum = damping * sum_{v : out_deg[v]==0} rank[v].
-      //     Dangling nodes have no outgoing edges so their rank mass
-      //     would be lost without this redistribution step.
-      //     The buffer is value-initialised to 0.0f so the reduction
-      //     starts from a known zero.
-      {
-        float zero = 0.0f;
-        sycl::buffer<float, 1> dsum_buf(&zero, sycl::range<1>(1));
-        auto e = queue.submit([&](sycl::handler& cgh) {
-          auto red = sycl::reduction(dsum_buf, cgh, sycl::plus<float>());
-          cgh.parallel_for<class PRDanglingKernel>(
-              sycl::range<1>(N), red, [=](sycl::id<1> idx, auto& sum) {
-                size_t v = idx[0];
-                if (out_deg[v] == 0.0f) { sum += damping * rank[v]; }
-              });
-        });
-        e.wait();
-        // Read dsum back to host so step (b) can use it.
-        sycl::host_accessor acc(dsum_buf, sycl::read_only);
-        dsum[0] = acc[0];
-#ifdef ENABLE_PROFILING
-        sygraph::Profiler::addEvent(e, "PR::Dangling");
-#endif
+      // Decide direction for this iteration.
+      bool use_push;
+      if (direction == pr_direction::push)        { use_push = true; }
+      else if (direction == pr_direction::pull)   { use_push = false; }
+      else if (direction == pr_direction::hybrid) { use_push = is_power_law || (iter < push_iters); }
+      else { // probe
+        if      (iter == 0) { use_push = true;  }
+        else if (iter == 1) { use_push = false; }
+        else                { use_push = probe_use_push; }
       }
+      if (use_push) { details.push_steps.insert(iter); }
+      else          { details.pull_steps.insert(iter); }
 
-      // (b) Fill accumulator with teleportation + dangling base score.
-      //
-      //     new_rank[v] = (1 - damping + dsum) / N  for all v.
-      //     This initialises the accumulator before edge contributions
-      //     are added in step (c), combining teleportation and dangling
-      //     redistribution in a single fill operation.
+      // Fill new_rank with the teleportation + dangling base score.
       {
         float base = (1.0f - damping + dsum[0]) / static_cast<float>(N);
         auto fill_e = queue.fill(new_rank, base, N);
@@ -325,40 +333,54 @@ public:
 #endif
       }
 
-      // (c) Edge contribution kernel - push or pull advance.
-      //
-      //     Push (default, -DPR_PULL not set):
-      //       For each edge (src -> dst):
-      //         new_rank[dst] += damping * rank[src] / out_deg[src]
-      //       Uses the forward graph. One workgroup per source vertex;
-      //       threads cooperate via prefix scan over the vertex's edges.
-      //
-      //     Pull (-DPR_PULL):
-      //       For each edge (dst -> src) in the inverse graph:
-      //         new_rank[src] += damping * rank[dst] / out_deg[dst]
-      //       Uses the inverse graph (getInverseDeviceGraph()).
-      //       May reduce atomic contention on power-law graphs where
-      //       hub vertices receive many contributions in push mode.
-#ifdef PR_PULL
-      // Pull via InverseGraphView: advance::vertices<workgroup_mapped> uses
-      // frontier_view::graph (all vertices processed, no frontier filtering)
-      // and direction::push (no isValidNeighbor filtering). By swapping
-      // getDeviceGraph() to return the inverse graph, each edge (dst->src) in
-      // the inverse traversal accumulates:
-      //   new_rank[src] += damping * rank[dst] / out_deg[dst]
-      // which is the correct PULL formula, and uses the same workgroup_mapped
-      // load balancer as the PUSH path.
-      {
-        InverseGraphView<GraphType> inv{G};
+      // Edge contribution kernel (advance timed on the host for the probe).
+      auto _adv_t0 = std::chrono::high_resolution_clock::now();
+      if (use_push) {
+        // Push: new_rank[dst] += scaled_rank[src] (* w with PR_WEIGHTED).
         auto e = sygraph::operators::advance::vertices<load_balance_t::workgroup_mapped>(
-            inv,
+            G, [=](auto src, auto dst, auto edge, auto weight) -> bool {
+              (void)edge;
+#ifdef PR_WEIGHTED
+              const float w = (static_cast<float>(weight) != 0.0f) ? static_cast<float>(weight) : 1.0f;
+#else
+              (void)weight;            // unused -> the compiler removes the per-edge values[] load
+              constexpr float w = 1.0f;
+#endif
+              const float contribution = scaled_rank[src] * w;
+              sygraph::sync::atomicFetchAdd(new_rank + dst, contribution);
+              return false;
+            });
+        e.waitAndThrow();
+#ifdef ENABLE_PROFILING
+        sygraph::Profiler::addEvent(e, "PR::Push");
+        sygraph::Profiler::addVisitedEdges(G.getEdgeCount());
+#endif
+      } else {
+        // Pull: advance::frontier<pull_all> visits EVERY vertex over the inverse CSR.
+        // Lambda args: src = original destination (receives rank), dst = original
+        // source (contributes rank).
+        // The explicit 4-arg form (dummy in AND out frontier) is kept DELIBERATELY
+        // over the library's tidier 3-arg overload: the two are functionally
+        // identical but instantiate different kernel symbols, and the 3-arg form
+        // measured consistently slower pull on the PR_WEIGHTED build (up to +30%
+        // on soc-LiveJournal). Measured beats idiomatic.
+        sygraph::frontier::Frontier<vertex_t, sygraph::frontier::frontier_type::none> fr_dummy;
+        auto e = sygraph::operators::advance::frontier<
+            direction_t::pull_all,
+            load_balance_t::workgroup_mapped,
+            frontier_view_t::graph,
+            frontier_view_t::graph>(
+            G, fr_dummy, fr_dummy,
             [=](auto src, auto dst, auto edge, auto weight) -> bool {
               (void)edge;
-              (void)weight;
-              float od = out_deg[dst];
-              if (od > 0.0f) {
-                sygraph::sync::atomicFetchAdd(new_rank + src, damping * rank[dst] / od);
-              }
+#ifdef PR_WEIGHTED
+              const float w = (static_cast<float>(weight) != 0.0f) ? static_cast<float>(weight) : 1.0f;
+#else
+              (void)weight;            // unused -> the compiler removes the per-edge values[] load
+              constexpr float w = 1.0f;
+#endif
+              const float contribution = scaled_rank[dst] * w;
+              sygraph::sync::atomicFetchAdd(new_rank + src, contribution);
               return false;
             });
         e.waitAndThrow();
@@ -367,81 +389,72 @@ public:
         sygraph::Profiler::addVisitedEdges(G.getEdgeCount());
 #endif
       }
-#else
+
+      // Probe: record the advance time of iter 0 (push) and iter 1 (pull); after the
+      // two samples, commit to the faster direction for iter >= 2.
+      if (direction == pr_direction::probe && !probe_decided) {
+        auto _adv_t1 = std::chrono::high_resolution_clock::now();
+        double _ms = std::chrono::duration<double, std::milli>(_adv_t1 - _adv_t0).count();
+        if      (iter == 0) { probe_push_ms = _ms; }
+        else if (iter == 1) { probe_pull_ms = _ms;
+                              probe_use_push = (probe_push_ms <= probe_pull_ms);
+                              probe_decided  = true; }
+      }
+
+      // Fused update + dangling in one pass over the rank array:
+      //   delta   = max_v |new_rank[v] - rank[v]|
+      //   rank[v] = new_rank[v]; scaled_rank refreshed
+      //   dsum    = dangling mass of the new rank (for the next iteration's fill)
+      // Stays a raw kernel: needs TWO simultaneous sycl::reductions (max + plus),
+      // which the library compute::reduce (single reduction, mlb frontier only)
+      // cannot express.
       {
-        auto e = sygraph::operators::advance::vertices<load_balance_t::workgroup_mapped>(
-            G, [=](auto src, auto dst, auto edge, auto weight) -> bool {
-              (void)edge;
-              (void)weight;
-              float od = out_deg[src];
-              if (od > 0.0f) {
-                sygraph::sync::atomicFetchAdd(new_rank + dst, damping * rank[src] / od);
-              }
-              return false;
-            });
-        e.waitAndThrow();
+        auto e = queue.submit([&](sycl::handler& cgh) {
+          auto red_delta = sycl::reduction(delta, sycl::maximum<float>(),
+                                           sycl::property::reduction::initialize_to_identity{});
+          auto red_dsum  = sycl::reduction(dsum, sycl::plus<float>(),
+                                           sycl::property::reduction::initialize_to_identity{});
+          cgh.parallel_for<class PRUpdateAndDanglingKernel>(
+              sycl::range<1>(N), red_delta, red_dsum,
+              [=](sycl::id<1> idx, auto& max_val, auto& sum_val) {
+                size_t v = idx[0];
+                float old_v = rank[v];
+                float new_v = new_rank[v];
+                rank[v] = new_v;
+                scaled_rank[v] = damping * new_v * inv_out_deg[v];
+                float diff = new_v - old_v;
+                max_val.combine((diff < 0.0f) ? -diff : diff);
+                if (out_deg[v] == 0.0f) { sum_val.combine(damping * new_v); }
+              });
+        });
+        e.wait();
 #ifdef ENABLE_PROFILING
-        sygraph::Profiler::addEvent(e, "PR::Push");
-        sygraph::Profiler::addVisitedEdges(G.getEdgeCount());
+        sygraph::Profiler::addEvent(e, "PR::UpdateAndDangling");
 #endif
       }
-#endif // PR_PULL
 
-      // (d) Update kernel - copy new_rank -> rank and compute L∞ delta.
-      //
-      //     delta = max_v |new_rank[v] - rank[v]|
-      //
-      //     The buffer is value-initialised to 0.0f so the maximum
-      //     reduction starts from a known value (absolute differences
-      //     are always >= 0).
-      {
-        float zero = 0.0f;
-        sycl::buffer<float, 1> delta_buf(&zero, sycl::range<1>(1));
-        {
-          auto e = queue.submit([&](sycl::handler& cgh) {
-            auto red = sycl::reduction(delta_buf, cgh, sycl::maximum<float>());
-            cgh.parallel_for<class PRDampingKernel>(
-                sycl::range<1>(N), red, [=](sycl::id<1> idx, auto& max_val) {
-                  size_t v = idx[0];
-                  float old_v = rank[v];
-                  float new_v = new_rank[v];
-                  rank[v] = new_v;
-                  float diff = new_v - old_v;
-                  float abs_diff = (diff < 0.0f) ? -diff : diff;
-                  max_val.combine(abs_diff);
-                });
-          });
-          e.wait();
-#ifdef ENABLE_PROFILING
-          sygraph::Profiler::addEvent(e, "PR::Update");
-#endif
-        }
-
-        // (e) Convergence check (L-infinity norm).
-        //     Stop if the maximum rank change across all vertices is
-        //     below epsilon.
-        sycl::host_accessor acc(delta_buf, sycl::read_only);
-        if (acc[0] < epsilon) { break; }
-      }
+      // Convergence check (L-infinity norm).
+      ++details.iterations;
+      if (delta[0] < epsilon) { break; }
     }
+
+#ifdef ENABLE_PROFILING
+    sygraph::Profiler::addVisitedEdges(G.getEdgeCount() * details.iterations);
+#endif
+    return details;
   }
 
   /**
    * @brief Returns the PageRank value of a single vertex.
-   *
-   * @param vertex The vertex for which to get the PageRank value.
-   * @return The PageRank value of the given vertex.
    */
   float getRank(size_t vertex) const {
     float val;
     _instance->G.getQueue().copy(_instance->rank + vertex, &val, 1).wait();
     return val;
-}
+  }
 
   /**
-   * @brief Returns the PageRank values for all vertices in the graph.
-   *
-   * @return A vector containing the PageRank value of every vertex.
+   * @brief Returns the PageRank values for all vertices.
    */
   std::vector<float> getRanks() const {
     std::vector<float> ranks(_instance->G.getVertexCount());
